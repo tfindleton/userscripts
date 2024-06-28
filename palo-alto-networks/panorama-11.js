@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name     Panorama 11 - Highlight Connection Status
-// @version  2.0
+// @version  2.1
 // @grant    none
 // @match    https://panorama.svpn.services/*
 // @description Style status based on connection status text

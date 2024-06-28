@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         InHand Device - Copy MAC Address
 // @namespace    http://tampermonkey.net/
-// @version      0.1
+// @version      0.2
 // @description  Copy MAC Address to clipboard
 // @author       Tyler Findleton
 // @match        https://*.iot.inhandnetworks.com/status-devices.jsp
