@@ -1,13 +1,11 @@
 // ==UserScript==
 // @name         InHand Device - Copy MAC Address
-// @namespace    http://tampermonkey.net/
-// @version      0.2
+// @version      0.3
 // @description  Copy MAC Address to clipboard
-// @author       Tyler Findleton
 // @match        https://*.iot.inhandnetworks.com/status-devices.jsp
 // @grant        GM_addStyle
-// @updateURL    https://raw.githubusercontent.com/tfindleton/userscripts/main/inhand/inhand-tunnel-status.js
 // @downloadURL  https://raw.githubusercontent.com/tfindleton/userscripts/main/inhand/inhand-tunnel-status.js
+// @updateURL    https://raw.githubusercontent.com/tfindleton/userscripts/main/inhand/inhand-tunnel-status.js
 // ==/UserScript==
 
 (function() {

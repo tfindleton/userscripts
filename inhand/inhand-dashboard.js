@@ -1,14 +1,12 @@
 // ==UserScript==
 // @name         InHand Dashboard - Copy Values to Clipboard
-// @namespace    http://tampermonkey.net/
-// @version      0.2
+// @version      0.3
 // @description  Adds a copy button next to IP, Phone, IMSI, IMEI, ICCID to copy to clipboard
-// @author       Tyler Findleton
 // @match        https://iot.inhandnetworks.com/device/profile/*/properties
 // @grant        GM_addStyle
 // @grant        GM_setClipboard
-// @updateURL    https://raw.githubusercontent.com/tfindleton/userscripts/main/inhand/inhand-dashboard.js
 // @downloadURL  https://raw.githubusercontent.com/tfindleton/userscripts/main/inhand/inhand-dashboard.js
+// @updateURL    https://raw.githubusercontent.com/tfindleton/userscripts/main/inhand/inhand-dashboard.js
 // ==/UserScript==
 
 (function() {
