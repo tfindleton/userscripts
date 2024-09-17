@@ -1,9 +1,8 @@
 // ==UserScript==
 // @name         UniFi Offline Highlighter
 // @namespace    http://tampermonkey.net/
-// @version      1.0.1
+// @version      1.0.2
 // @description  Highlights "Offline" status in red on UniFi UI page
-// @author       Tyler Findleton
 // @match        https://unifi.ui.com/*
 // @grant        none
 // @run-at       document-end
