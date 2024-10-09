@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Simple Euro to USD Converter for Hetzner Console
+// @name         Improved Euro to USD Converter for Hetzner Console
 // @namespace    http://tampermonkey.net/
-// @version      1.0.1
-// @description  Appends estimated USD values below Euro amounts on console.hetzner.cloud
+// @version      1.0.3
+// @description  Appends estimated USD values below Euro amounts on console.hetzner.cloud without duplicating price periods.
 // @match        https://console.hetzner.cloud/*
 // @grant        none
 // @run-at       document-end
@@ -14,149 +14,90 @@
     'use strict';
 
     // === Configuration ===
-    // Set your desired EUR to USD exchange rate here.
-    // Example: 1 EUR = 1.10 USD
     const EUR_TO_USD_RATE = 1.10;
+    const USD_COLOR = '#B2D9F5';
     // ======================
 
-    // WeakSet to keep track of processed text nodes
-    const processedNodes = new WeakSet();
-
-    /**
-     * Formats the USD amount based on the number of decimal places in the Euro amount.
-     * Removes trailing zeros beyond two decimal places.
-     * @param {number} amount - The calculated USD amount.
-     * @param {number} decimalPlaces - The number of decimal places in the Euro amount.
-     * @returns {string} - The formatted USD amount.
-     */
     function formatUSD(amount, decimalPlaces) {
-        if (decimalPlaces <= 2){
-            return amount.toFixed(decimalPlaces);
-        } else {
-            // Round down to three decimal places
-            const rounded = Math.floor(amount * 1000) / 1000;
-            // Convert to string with three decimal places
-            let usdString = rounded.toFixed(3);
-            // Remove the third decimal if it's zero
-            if (usdString.endsWith('0')) {
-                usdString = usdString.slice(0, -1);
-            }
-            return usdString;
+        return amount.toFixed(Math.max(decimalPlaces, 2));
+    }
+
+    function processPrice(priceElement) {
+        const priceText = priceElement.textContent.trim();
+        const match = priceText.match(/€\s?(\d+(?:\.\d{1,3})?)/);
+        if (!match) return;
+
+        const euroAmount = parseFloat(match[1]);
+        const decimals = match[1].includes('.') ? match[1].split('.')[1].length : 0;
+        const usdAmount = euroAmount * EUR_TO_USD_RATE;
+        const formattedUSD = formatUSD(usdAmount, decimals);
+
+        // Check if USD estimate already exists
+        let usdElement = priceElement.querySelector('.usd-estimate');
+        if (!usdElement) {
+            // Create new USD estimate element
+            usdElement = document.createElement('div');
+            usdElement.className = 'usd-estimate';
+            usdElement.style.color = USD_COLOR;
+            usdElement.style.marginTop = '2px';
+            priceElement.appendChild(usdElement);
+        }
+
+        // Update USD estimate
+        usdElement.textContent = `~$${formattedUSD}`;
+
+        // Handle period text (e.g., "/mo" or "/h")
+        const periodElement = priceElement.querySelector('.price-period, .price-month-label');
+        if (periodElement) {
+            const periodText = periodElement.textContent.trim();
+
+            // === OPTION 1: Stack prices (uncomment this block to enable) ===
+            // usdElement.textContent = `~$${formattedUSD} ${periodText}`;
+            // periodElement.style.display = "none"; // Hide the original period
+
+            // === OPTION 2: Remove period from USD estimate (uncomment this block to enable) ===
+            usdElement.textContent = `~$${formattedUSD}`;
+            // Period will only be shown with Euro amount
+
+            // Move the original period element after the USD estimate
+            usdElement.parentNode.insertBefore(periodElement, usdElement.nextSibling);
         }
     }
 
-    /**
-     * Processes a single text node to find and append USD equivalents.
-     * @param {Text} textNode - The text node to process.
-     */
-    function processTextNode(textNode) {
-        // If the node is already processed, skip
-        if (processedNodes.has(textNode)) {
-            return;
-        }
-
-        const originalText = textNode.nodeValue;
-        // Regular expression to find '€' followed by a number, e.g., €3.16 or €0.006
-        // Negative lookahead to ensure it hasn't been processed yet (i.e., not followed by ' ~$')
-        const euroAmountRegex = /€\s?(\d+(?:\.\d{1,3})?)(?!\s*~\$)/g;
-
-        let match;
-        const matches = [];
-
-        // Collect all matches first
-        while ((match = euroAmountRegex.exec(originalText)) !== null) {
-            matches.push({
-                text: match[0],
-                amount: parseFloat(match[1]),
-                index: match.index,
-                length: match[0].length,
-                decimals: match[1].includes('.') ? match[1].split('.')[1].length : 0
-            });
-        }
-
-        // If no matches, mark as processed and return
-        if (matches.length === 0) {
-            processedNodes.add(textNode);
-            return;
-        }
-
-        // Iterate over matches from the end to avoid messing up indices
-        for (let i = matches.length -1; i >=0; i--) {
-            const { text, amount, index, length, decimals } = matches[i];
-            const usdAmount = amount * EUR_TO_USD_RATE;
-            const formattedUSD = formatUSD(usdAmount, decimals);
-
-            // Split the text node at the end of the match
-            const afterMatch = textNode.splitText(index + length);
-
-            // Create a <br> element
-            const br = document.createElement('br');
-
-            // Create a text node with the USD amount
-            const usdTextNode = document.createTextNode(`~$${formattedUSD}`);
-
-            // Insert <br> and USD text node
-            afterMatch.parentNode.insertBefore(br, afterMatch);
-            afterMatch.parentNode.insertBefore(usdTextNode, afterMatch);
-        }
-
-        // Mark the node as processed to prevent reprocessing
-        processedNodes.add(textNode);
+    function processPrices(container) {
+        // Target various price elements
+        const priceElements = container.querySelectorAll('.price-amount, .col--price, .usage-table__table-cell:last-child, .hc-table__foot-calc-sum');
+        priceElements.forEach(processPrice);
     }
 
-    /**
-     * Traverses the DOM to find and process all relevant text nodes.
-     * @param {Node} rootNode - The root node to start traversal.
-     */
-    function traverseDOM(rootNode) {
-        const walker = document.createTreeWalker(
-            rootNode,
-            NodeFilter.SHOW_TEXT,
-            null,
-            false
-        );
-
-        let node;
-        const textNodes = [];
-
-        // Collect all text nodes first to avoid live traversal issues
-        while ((node = walker.nextNode())) {
-            if (node.nodeValue.includes('€')) {
-                textNodes.push(node);
-            }
-        }
-
-        // Process each collected text node
-        textNodes.forEach(node => processTextNode(node));
-    }
-
-    /**
-     * Initializes the conversion process and sets up the MutationObserver.
-     */
     function initializeConversion() {
-        // Initial traversal and processing
-        traverseDOM(document.body);
-        console.log(`Euro to USD conversion script initialized with rate: 1 EUR = ${EUR_TO_USD_RATE} USD`);
+        processPrices(document.body);
 
-        // Set up a MutationObserver to handle dynamic content
         const observer = new MutationObserver((mutations) => {
             mutations.forEach((mutation) => {
-                mutation.addedNodes.forEach((node) => {
-                    if (node.nodeType === Node.TEXT_NODE) {
-                        if (node.nodeValue.includes('€')) {
-                            processTextNode(node);
+                if (mutation.type === 'childList') {
+                    mutation.addedNodes.forEach((node) => {
+                        if (node.nodeType === Node.ELEMENT_NODE) {
+                            processPrices(node);
                         }
-                    } else if (node.nodeType === Node.ELEMENT_NODE) {
-                        traverseDOM(node);
+                    });
+                } else if (mutation.type === 'characterData') {
+                    const targetElement = mutation.target.parentElement;
+                    if (targetElement && (targetElement.classList.contains('price-amount') || targetElement.classList.contains('col--price'))) {
+                        processPrice(targetElement);
                     }
-                });
+                }
             });
         });
 
-        observer.observe(document.body, { childList: true, subtree: true });
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true,
+            characterData: true
+        });
+
+        console.log(`Euro to USD conversion script initialized with rate: 1 EUR = ${EUR_TO_USD_RATE} USD`);
     }
 
-    // Run the conversion
     initializeConversion();
-
 })();
