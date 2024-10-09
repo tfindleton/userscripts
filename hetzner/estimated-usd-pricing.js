@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Simple Euro to USD Converter for Hetzner Console
 // @namespace    http://tampermonkey.net/
-// @version      1.0
+// @version      1.1
 // @description  Appends estimated USD values below Euro amounts on console.hetzner.cloud
 // @match        https://console.hetzner.cloud/*
 // @grant        none
@@ -33,12 +33,11 @@
         }
 
         const originalText = textNode.nodeValue;
-        // Regular expression to find '€' followed by a number, e.g., €3.16
-        // Negative lookahead to ensure it hasn't been processed yet
-        const euroAmountRegex = /€\s?(\d+(\.\d{1,2})?)(?!\s*~\$)/g;
+        // Regular expression to find '€' followed by a number, e.g., €3.16 or €0.006
+        // Negative lookahead to ensure it hasn't been processed yet (i.e., not followed by ' ~$/')
+        const euroAmountRegex = /€\s?(\d+(?:\.\d+)?)(?!\s*~\$)/g;
 
         let match;
-        let hasMatch = false;
         const matches = [];
 
         // Collect all matches first
@@ -58,17 +57,20 @@
         }
 
         // Iterate over matches from the end to avoid messing up indices
-        for (let i = matches.length - 1; i >= 0; i--) {
+        for (let i = matches.length -1; i >=0; i--) {
             const { text, amount, index, length } = matches[i];
             const usdAmount = (amount * EUR_TO_USD_RATE).toFixed(2);
 
             // Split the text node at the end of the match
             const afterMatch = textNode.splitText(index + length);
 
-            // Create a new line with the USD equivalent
+            // Create a new text node with the USD equivalent on the next line
             const usdTextNode = document.createElement('span');
             usdTextNode.textContent = `\n~$${usdAmount}`;
             usdTextNode.style.display = 'block'; // Ensures it starts on a new line
+            usdTextNode.style.marginLeft = '10px'; // Optional: Adds indentation for readability
+            usdTextNode.style.color = '#555'; // Optional: Grey color for less prominence
+            usdTextNode.style.fontStyle = 'italic'; // Optional: Italicized for distinction
 
             // Insert the USD equivalent after the Euro amount
             afterMatch.parentNode.insertBefore(usdTextNode, afterMatch);
