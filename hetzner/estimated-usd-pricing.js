@@ -1,9 +1,10 @@
 // ==UserScript==
-// @name         Improved Euro to USD Converter for Hetzner Console
+// @name         Hetzner Console - Estimated Euro to USD Converter
 // @namespace    http://tampermonkey.net/
-// @version      1.0.3
+// @version      1.0.4
 // @description  Appends estimated USD values below Euro amounts on console.hetzner.cloud without duplicating price periods.
 // @match        https://console.hetzner.cloud/*
+// @icon         https://console.hetzner.cloud/favicon-32x32.png
 // @grant        none
 // @run-at       document-end
 // @updateURL    https://raw.githubusercontent.com/tfindleton/userscripts/main/hetzner/estimated-usd-pricing.js
