@@ -18,7 +18,8 @@
         selectors: {
             gridItem: '.virtuoso-grid-item',
             deviceLink: 'a[data-testid="oslink"]',
-            backupSpan: '.tile-footer span.content__VCR3r9bC'
+            backupSpan: '.tile-footer span.content__VCR3r9bC',
+            offlineSpan: '.tile-footer.offline'
         },
         classes: {
             offlineDevice: 'offline-device'
@@ -76,7 +77,7 @@
     }
 
     /**
-     * Function to highlight offline devices based on "Backup Created" text
+     * Function to highlight offline devices based on "Backup Created" text or "Offline" status
      */
     function highlightOfflineDevices() {
         try {
@@ -85,11 +86,13 @@
             gridItems.forEach((item) => {
                 const mainLink = item.querySelector(CONFIG.selectors.deviceLink);
                 const backupSpan = item.querySelector(CONFIG.selectors.backupSpan);
+                const offlineSpan = item.querySelector(CONFIG.selectors.offlineSpan);
 
                 if (!mainLink) return;
 
                 const hasBackup = backupSpan?.textContent.includes('Backup Created') || false;
-                mainLink.classList.toggle(CONFIG.classes.offlineDevice, hasBackup);
+                const isOffline = offlineSpan?.textContent.includes('Offline') || false;
+                mainLink.classList.toggle(CONFIG.classes.offlineDevice, hasBackup || isOffline);
             });
         } catch (error) {
             console.error('Error in UniFi Offline Highlighter:', error);
