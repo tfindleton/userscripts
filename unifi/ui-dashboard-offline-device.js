@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         UniFi Offline Highlighter
 // @namespace    http://tampermonkey.net/
-// @version      1.0.3
+// @version      1.0.4
 // @description  Highlights devices with "Backup Created" indicator subtly on UniFi UI page
 // @match        https://unifi.ui.com/*
 // @grant        none
