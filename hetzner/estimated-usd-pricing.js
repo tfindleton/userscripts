@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Hetzner Console - Estimated Euro to USD Converter
 // @namespace    http://tampermonkey.net/
-// @version      1.0.5
+// @version      1.0.6
 // @description  Appends estimated USD values below Euro amounts on console.hetzner.cloud without duplicating price periods.
 // @match        https://console.hetzner.cloud/*
 // @icon         https://console.hetzner.cloud/favicon-32x32.png
@@ -58,6 +58,15 @@
         return amount.toFixed(Math.max(decimalPlaces, 2));
     }
 
+    function showToggleButtonIfNeeded() {
+        const conversionsExist = document.querySelectorAll('.usd-estimate').length > 0;
+        const toggleButton = document.getElementById('usd-toggle-button');
+        
+        if (toggleButton) {
+            toggleButton.style.display = conversionsExist ? 'block' : 'none';
+        }
+    }
+
     function processPrice(priceElement) {
         try {
             const priceText = priceElement.textContent.trim();
@@ -103,6 +112,9 @@
                 // Move the original period element after the USD estimate
                 usdElement.parentNode.insertBefore(periodElement, usdElement.nextSibling);
             }
+            
+            // Show toggle button when conversions exist
+            showToggleButtonIfNeeded();
         } catch (error) {
             console.warn('Error processing price element:', error, priceElement);
         }
@@ -112,6 +124,9 @@
         // Target various price elements
         const priceElements = container.querySelectorAll('.price-amount, .col--price, .usage-table__table-cell:last-child, .hc-table__foot-calc-sum');
         priceElements.forEach(processPrice);
+        
+        // Check if we should show the toggle button
+        showToggleButtonIfNeeded();
     }
 
     function registerSettings() {
@@ -141,7 +156,8 @@
 
     function addToggleButton() {
         const button = document.createElement('button');
-        button.textContent = "Toggle USD";
+        button.id = 'usd-toggle-button';
+        button.textContent = "Hide USD";
         button.style.position = "fixed";
         button.style.bottom = "10px";
         button.style.left = "50%"; // Center horizontally
@@ -154,6 +170,7 @@
         button.style.backgroundColor = "#f5f5f5";
         button.style.cursor = "pointer"; // Hand cursor on hover
         button.style.color = "#000";
+        button.style.display = "none"; // Hidden by default
         
         // Hover effect
         button.onmouseover = () => { 
