@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         InHand Signal Levels + Hover Explanation
 // @namespace    http://tampermonkey.net/
-// @version      0.1
+// @version      0.2
 // @description  Color-coded signal readings for InHand IR300/IR600, plus hover tooltip with measure explanation & thresholds. Keeps tooltip on-screen.
 // @match        https://iot.inhandnetworks.com/*
 // @grant        GM_addStyle
@@ -255,19 +255,19 @@
         // Already patched? skip
         if (extraEl.dataset.signalPatched === 'yes') return;
 
-        // Typically the reading is in the first <span>
-        const spans = extraEl.querySelectorAll('span');
-        if (!spans.length) return;
+        // The reading div is now wrapped in an additional div
+        const readingDiv = extraEl.querySelector('div');
+        if (!readingDiv) return;
 
-        const readingSpan = spans[0];
+        // Find the first span in the container (which contains the reading)
+        const readingSpan = readingDiv.querySelector('span');
+        if (!readingSpan) return;
+
         const readingStr = readingSpan.textContent.trim();
         const readingNum = parseValue(readingStr);
 
-        // Possibly a second span for units (e.g., "dBm")
-        let unitStr = '';
-        if (spans.length > 1) {
-            unitStr = spans[1].textContent.trim();
-        }
+        // Extract text before the span for label context
+        const labelText = readingDiv.textContent.split(readingStr)[0].trim();
 
         // Determine label & color
         const result = getLabelAndColor(measureName, readingNum);
@@ -284,8 +284,16 @@
         labelBadge.style.backgroundColor = color;
         
         let displayText = readingStr;
-        if (unitStr) displayText += ` ${unitStr}`;
-        displayText += ` => ${desc}`;
+        // Add any unit or context from the label if available
+        if (labelText) {
+            const unitMatch = labelText.match(/^Latest\s+[\w\s]+:/);
+            if (unitMatch) {
+                // Just use the reading and the description
+                displayText = `${readingStr} => ${desc}`;
+            }
+        } else {
+            displayText += ` => ${desc}`;
+        }
         labelBadge.textContent = displayText;
 
         // Create "?" icon w/ tooltip
@@ -317,7 +325,8 @@
     }
 
     function patchAllSignalCards() {
-        const allCards = document.querySelectorAll('.ant-card.antd-pro-src-pages-elms-device-signal-index-chart');
+        // Updated selector to match the new class names (removed 'src-' part)
+        const allCards = document.querySelectorAll('.ant-card.antd-pro-pages-elms-device-signal-index-chart');
         allCards.forEach(patchSignalCard);
     }
 
