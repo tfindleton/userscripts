@@ -1,20 +1,53 @@
 // ==UserScript==
 // @name         Panorama 11 - Highlight & Copy by Header (Multi-table version)
-// @version      2.3.1
+// @version      2.3.2
 // @description  Only style/copy on summary page. Finds columns by header text "Device Name"/"Serial Number", even if multiple <table> in the header.
 // @icon         https://example.com/favicon.ico
-// @match        https://example.com/*
+// @match        https://pan.svpn.services/*
 // @grant        none
 // ==/UserScript==
 
 (function () {
   'use strict';
 
-  const DEBUG = true; // Set to false in production to suppress debug logs.
+  const DEBUG = false; // Set to false in production to suppress debug logs.
 
-  // We only want to run when the hash includes "panorama/managed-devices/summary"
+  // We only want to run on known Panorama managed-device summary routes.
+  const RELEVANT_HASH_FRAGMENTS = [
+    'panorama/managed-devices/summary',
+    'panorama::standard',
+    'panorama::',
+  ];
+
+  const HEADER_KEYWORDS = [
+    'Device Name',
+    'Serial Number',
+    'Software Version',
+  ];
+
+  function getNormalizedHash() {
+    const rawHash = window.location.hash || '';
+    try {
+      return decodeURIComponent(rawHash).toLowerCase();
+    } catch (err) {
+      if (DEBUG) {
+        console.warn('[DEBUG] Failed to decode hash, using raw value:', rawHash, err);
+      }
+      return rawHash.toLowerCase();
+    }
+  }
+
   function isRelevantPage() {
-    return window.location.hash.includes('panorama/managed-devices/summary');
+    const currentHash = getNormalizedHash();
+    if (
+      currentHash &&
+      RELEVANT_HASH_FRAGMENTS.some((fragment) => currentHash.includes(fragment))
+    ) {
+      return true;
+    }
+
+    // Fallback: if the grid header exists we are on a managed devices table even if the hash is missing yet.
+    return document.querySelector('.x-grid3-header') !== null;
   }
 
   // We'll store a map of: gridElement -> Set of interesting column indexes
@@ -39,9 +72,11 @@
         }
         startObserving();
       }
-      // In case some elements are already present (page loaded with the correct hash),
-      // handle them right away:
-      processExistingElements(document.body);
+      if (document.body) {
+        // In case some elements are already present (page loaded with the correct hash),
+        // handle them right away:
+        processExistingElements(document.body);
+      }
     } else {
       if (observer) {
         if (DEBUG) {
@@ -54,6 +89,18 @@
   }
 
   function startObserving() {
+    if (observer) {
+      return;
+    }
+
+    if (!document.body) {
+      if (DEBUG) {
+        console.log('[DEBUG] document.body not ready. Waiting for DOMContentLoaded.');
+      }
+      document.addEventListener('DOMContentLoaded', startObserving, { once: true });
+      return;
+    }
+
     observer = new MutationObserver(mutationCallback);
     observer.observe(document.body, { childList: true, subtree: true });
   }
@@ -96,11 +143,7 @@
           console.log('[DEBUG] Found new/updated .x-grid3-header in grid', grid);
         }
         // Recalc columns for this grid
-        const colIndexes = findInterestingColumns(grid, [
-          'Device Name',
-          'Serial Number',
-          'Software Version',
-        ]);
+        const colIndexes = findInterestingColumns(grid, HEADER_KEYWORDS);
         gridColIndexesMap.set(grid, colIndexes);
         if (DEBUG) {
           console.log('[DEBUG] Set colIndexes for grid:', Array.from(colIndexes));
@@ -140,11 +183,7 @@
     let colIndexes = gridColIndexesMap.get(grid);
     if (!colIndexes) {
       // We may not have processed this grid's header yet. Let's try:
-      colIndexes = findInterestingColumns(grid, [
-        'Device Name',
-        'Serial Number',
-        'Software Version',
-      ]);
+      colIndexes = findInterestingColumns(grid, HEADER_KEYWORDS);
       gridColIndexesMap.set(grid, colIndexes);
       if (DEBUG) {
         console.log('[DEBUG] Late colIndexes init for grid:', Array.from(colIndexes));
@@ -180,11 +219,7 @@
 
     let colIndexes = gridColIndexesMap.get(grid);
     if (!colIndexes) {
-      colIndexes = findInterestingColumns(grid, [
-        'Device Name',
-        'Serial Number',
-        'Software Version',
-      ]);
+      colIndexes = findInterestingColumns(grid, HEADER_KEYWORDS);
       gridColIndexesMap.set(grid, colIndexes);
       if (DEBUG) {
         console.log('[DEBUG] Late colIndexes init via processCell:', Array.from(colIndexes));
@@ -279,6 +314,8 @@
     if (DEBUG) {
       console.log('[DEBUG] Checking status for cell text:', text);
     }
+    cellDiv.style.color = '';
+    cellDiv.style.fontWeight = '';
     if (text === 'Disconnected') {
       cellDiv.style.color = '#D94949';
       cellDiv.style.fontWeight = 'bold';
@@ -293,16 +330,16 @@
    *   - Allows clicking on a cell to copy its text to the clipboard.
    */
   function addCopyBehavior(cellDiv) {
+    const currentText = cellDiv.textContent.trim();
     if (cellDiv.dataset.hasCopy === 'true') {
       if (DEBUG) {
         console.log('[DEBUG] Copy behavior already added to this cell:', cellDiv);
       }
+      cellDiv.dataset.originalText = currentText;
       return;
     }
     cellDiv.dataset.hasCopy = 'true';
-
-    const originalText = cellDiv.textContent.trim();
-    cellDiv.dataset.originalText = originalText;
+    cellDiv.dataset.originalText = currentText;
 
     cellDiv.style.cursor = 'pointer';
     cellDiv.addEventListener('click', () => {
