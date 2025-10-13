@@ -1,13 +1,13 @@
 // ==UserScript==
 // @name         UniFi Offline Highlighter
 // @namespace    http://tampermonkey.net/
-// @version      1.0.4
+// @version      1.0.5
 // @description  Highlights devices with "Backup Created" indicator subtly on UniFi UI page
 // @match        https://unifi.ui.com/*
 // @grant        none
 // @run-at       document-end
-// @updateURL    https://raw.githubusercontent.com/tfindleton/userscripts/main/unifi/ui-dashboard-offline-device.js
-// @downloadURL  https://raw.githubusercontent.com/tfindleton/userscripts/main/unifi/ui-dashboard-offline-device.js
+// @updateURL    https://raw.githubusercontent.com/tfindleton/userscripts/refs/heads/main/unifi/ui-dashboard-offline-device.js
+// @downloadURL  https://raw.githubusercontent.com/tfindleton/userscripts/refs/heads/main/unifi/ui-dashboard-offline-device.js
 // ==/UserScript==
 
 (function () {
@@ -15,6 +15,7 @@
 
     // Configuration
     const CONFIG = {
+        styleId: 'unifi-offline-device-style',
         selectors: {
             gridItem: '.virtuoso-grid-item',
             deviceLink: 'a[data-testid="oslink"]',
@@ -55,7 +56,12 @@
      * Inject custom CSS for offline devices
      */
     function injectStyles() {
+        if (document.getElementById(CONFIG.styleId)) {
+            return;
+        }
+
         const style = document.createElement('style');
+        style.id = CONFIG.styleId;
         style.textContent = `
             /* Offline device styling */
             ${CONFIG.selectors.deviceLink}.${CONFIG.classes.offlineDevice} {
@@ -73,7 +79,7 @@
                 transform: translateY(-1px);
             }
         `;
-        document.head.appendChild(style);
+        (document.head || document.documentElement).appendChild(style);
     }
 
     /**
@@ -90,13 +96,18 @@
 
                 if (!mainLink) return;
 
-                const hasBackup = backupSpan?.textContent.includes('Backup Created') || false;
-                const isOffline = offlineSpan?.textContent.includes('Offline') || false;
+                const hasBackup = textIncludes(backupSpan?.textContent, 'backup created');
+                const isOffline = textIncludes(offlineSpan?.textContent, 'offline');
                 mainLink.classList.toggle(CONFIG.classes.offlineDevice, hasBackup || isOffline);
             });
         } catch (error) {
             console.error('Error in UniFi Offline Highlighter:', error);
         }
+    }
+
+    function textIncludes(value, needle) {
+        if (!value) return false;
+        return value.toLowerCase().includes(needle);
     }
 
     /**
@@ -112,13 +123,13 @@
 
             // Set up the observer
             const observer = new MutationObserver((mutations) => {
-                if (mutations.some(m => m.type === 'childList' || m.type === 'subtree')) {
+                if (mutations.some((m) => m.type === 'childList' || m.type === 'characterData')) {
                     debouncedHighlight();
                 }
             });
 
             // Start observing
-            observer.observe(document.body, { childList: true, subtree: true });
+            observer.observe(document.body, { childList: true, subtree: true, characterData: true });
         } catch (error) {
             console.error('Error initializing UniFi Offline Highlighter:', error);
         }
