@@ -1,10 +1,12 @@
 // ==UserScript==
 // @name         Panorama 11 - Highlight & Copy by Header (Multi-table version)
-// @version      2.3.2
+// @version      2.3.3
 // @description  Only style/copy on summary page. Finds columns by header text "Device Name"/"Serial Number", even if multiple <table> in the header.
-// @icon         https://example.com/favicon.ico
+// @icon         https://pan.svpn.services/favicon.ico
 // @match        https://pan.svpn.services/*
 // @grant        none
+// @downloadURL  https://raw.githubusercontent.com/tfindleton/userscripts/refs/heads/main/palo-alto-networks/panorama-11.js
+// @updateURL    https://raw.githubusercontent.com/tfindleton/userscripts/refs/heads/main/palo-alto-networks/panorama-11.js
 // ==/UserScript==
 
 (function () {
