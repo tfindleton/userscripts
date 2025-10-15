@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Hetzner Console - Estimated Euro to USD Converter
 // @namespace    http://tampermonkey.net/
-// @version      1.1.1
+// @version      1.1.2
 // @description  Appends estimated USD values below Euro amounts on console.hetzner.cloud without duplicating price periods.
 // @match        https://console.hetzner.cloud/*
 // @match        https://console.hetzner.com/*
@@ -33,7 +33,7 @@
 
     let EUR_TO_USD_RATE = DEFAULT_EUR_TO_USD_RATE;
     let manualRateOverride = null;
-    let usdVisible = false;
+    let currentCurrency = 'EUR';
     let toggleButton = null;
 
     function parseStoredNumber(value) {
@@ -108,6 +108,7 @@
     }
 
     async function updateExchangeRate(force = false) {
+        let rateUpdated = false;
         if (!force && manualRateOverride !== null) {
             console.log(`Manual exchange rate override active (${manualRateOverride}); skipping automatic update.`);
             return;
@@ -118,25 +119,30 @@
             const savedRate = localStorage.getItem('eur_usd_rate');
             const lastUpdate = localStorage.getItem('eur_usd_rate_updated');
             const now = Date.now();
-            
-            if (savedRate && lastUpdate && (now - parseInt(lastUpdate)) < UPDATE_INTERVAL) {
+
+            if (savedRate && lastUpdate && (now - parseInt(lastUpdate, 10)) < UPDATE_INTERVAL) {
                 EUR_TO_USD_RATE = parseFloat(savedRate);
+                rateUpdated = true;
                 console.log(`Using cached exchange rate: 1 EUR = ${EUR_TO_USD_RATE} USD`);
-                return;
-            }
-            
-            // Fetch current rate
-            const response = await fetch(EXCHANGE_API_URL);
-            const data = await response.json();
-            
-            if (data && data.rates && data.rates.USD) {
-                EUR_TO_USD_RATE = data.rates.USD;
-                localStorage.setItem('eur_usd_rate', EUR_TO_USD_RATE);
-                localStorage.setItem('eur_usd_rate_updated', now.toString());
-                console.log(`Updated exchange rate: 1 EUR = ${EUR_TO_USD_RATE} USD`);
+            } else {
+                // Fetch current rate
+                const response = await fetch(EXCHANGE_API_URL);
+                const data = await response.json();
+
+                if (data && data.rates && data.rates.USD) {
+                    EUR_TO_USD_RATE = data.rates.USD;
+                    localStorage.setItem('eur_usd_rate', EUR_TO_USD_RATE);
+                    localStorage.setItem('eur_usd_rate_updated', now.toString());
+                    rateUpdated = true;
+                    console.log(`Updated exchange rate: 1 EUR = ${EUR_TO_USD_RATE} USD`);
+                }
             }
         } catch (error) {
             console.warn('Failed to fetch exchange rate, using default:', error);
+        } finally {
+            if (rateUpdated) {
+                processPrices(document.body);
+            }
         }
     }
 
@@ -152,72 +158,200 @@
         if (!toggleButton) {
             return;
         }
-        const conversionsExist = document.querySelectorAll('.usd-estimate').length > 0;
+        const conversionsExist = document.querySelectorAll('.price-switcher__usd').length > 0;
         toggleButton.style.display = conversionsExist ? 'block' : 'none';
+        if (conversionsExist) {
+            updateToggleButtonLabel();
+        }
+    }
+
+    function findEuroTextNode(element) {
+        const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, {
+            acceptNode(node) {
+                if (!containsEuro(node.textContent)) {
+                    return NodeFilter.FILTER_SKIP;
+                }
+                if (node.parentElement && node.parentElement.closest('.price-switcher')) {
+                    return NodeFilter.FILTER_SKIP;
+                }
+                return NodeFilter.FILTER_ACCEPT;
+            }
+        });
+        return walker.nextNode();
+    }
+
+    function normalizeEuroDisplay(rawDisplay) {
+        return rawDisplay.replace(/^\s+|\s+$/g, '');
+    }
+
+    function parseEuroAmount(rawDigits) {
+        const cleaned = rawDigits.replace(/\s/g, '');
+        if (cleaned.includes(',')) {
+            const stripped = cleaned.replace(/\./g, '');
+            return parseFloat(stripped.replace(',', '.'));
+        }
+        return parseFloat(cleaned.replace(/[^0-9.]/g, ''));
+    }
+
+    function buildPriceWrapper(euroDisplay, usdDisplay, euroAmount, decimals) {
+        const wrapper = document.createElement('span');
+        wrapper.className = 'price-switcher';
+        wrapper.dataset.originalEuro = euroDisplay;
+        wrapper.dataset.euroAmount = String(euroAmount);
+        wrapper.dataset.decimals = String(decimals);
+
+        const euroSpan = document.createElement('span');
+        euroSpan.className = 'price-switcher__eur';
+        euroSpan.textContent = euroDisplay;
+        euroSpan.title = `$${usdDisplay} USD`;
+        euroSpan.setAttribute('aria-label', `$${usdDisplay} USD`);
+
+        const usdSpan = document.createElement('span');
+        usdSpan.className = 'price-switcher__usd usd-estimate';
+        usdSpan.textContent = `$${usdDisplay}`;
+        usdSpan.title = `Original price ${euroDisplay}`;
+        usdSpan.setAttribute('aria-label', `Original price ${euroDisplay}`);
+
+        wrapper.appendChild(euroSpan);
+        wrapper.appendChild(usdSpan);
+
+        return wrapper;
+    }
+
+    function updateWrapper(wrapper) {
+        const euroSpan = wrapper.querySelector('.price-switcher__eur');
+        const usdSpan = wrapper.querySelector('.price-switcher__usd');
+        if (!euroSpan || !usdSpan) {
+            return;
+        }
+
+        let euroDisplay = euroSpan.textContent ? normalizeEuroDisplay(euroSpan.textContent) : '';
+        if (!euroDisplay) {
+            euroDisplay = wrapper.dataset.originalEuro || '';
+        }
+
+        const match = euroDisplay.match(/€\s*([\d\.,]+)/);
+        if (!match) {
+            return;
+        }
+
+        const euroDigits = match[1];
+        const decimals = euroDigits.includes(',') || euroDigits.includes('.')
+            ? euroDigits.split(/[.,]/).pop().length
+            : parseInt(wrapper.dataset.decimals || '2', 10);
+        const euroAmount = parseEuroAmount(euroDigits);
+
+        if (Number.isFinite(euroAmount)) {
+            wrapper.dataset.originalEuro = euroDisplay;
+            wrapper.dataset.euroAmount = String(euroAmount);
+            wrapper.dataset.decimals = String(decimals);
+            const usdDisplay = formatUSD(euroAmount * EUR_TO_USD_RATE, decimals);
+            euroSpan.title = `$${usdDisplay} USD`;
+            euroSpan.setAttribute('aria-label', `$${usdDisplay} USD`);
+            usdSpan.textContent = `$${usdDisplay}`;
+            const tooltip = `Original price ${euroDisplay}`;
+            usdSpan.title = tooltip;
+            usdSpan.setAttribute('aria-label', tooltip);
+        }
+
+        applyCurrencyViewToWrapper(wrapper);
+    }
+
+    function applyCurrencyViewToWrapper(wrapper) {
+        const euroSpan = wrapper.querySelector('.price-switcher__eur');
+        const usdSpan = wrapper.querySelector('.price-switcher__usd');
+        if (!euroSpan || !usdSpan) {
+            return;
+        }
+
+        if (currentCurrency === 'USD') {
+            euroSpan.style.display = 'none';
+            usdSpan.style.display = 'inline';
+        } else {
+            euroSpan.style.display = 'inline';
+            usdSpan.style.display = 'none';
+        }
+    }
+
+    function applyCurrencyView() {
+        document.querySelectorAll('.price-switcher').forEach(applyCurrencyViewToWrapper);
+        updateToggleButtonLabel();
+    }
+
+    function updateToggleButtonLabel() {
+        if (!toggleButton) {
+            return;
+        }
+        const rateDisplay = formatUSD(EUR_TO_USD_RATE, 3);
+        const nextLabel = currentCurrency === 'EUR' ? 'show as usd' : 'show as euro';
+        toggleButton.textContent = `${nextLabel} (1€ ~ $${rateDisplay})`;
+    }
+
+    function insertWrapperForTextNode(textNode, wrapper) {
+        const original = textNode.textContent;
+        const leadingMatch = original.match(/^(\s*)/);
+        const trailingMatch = original.match(/(\s*)$/);
+        const leading = leadingMatch ? leadingMatch[0] : '';
+        const trailing = trailingMatch ? trailingMatch[0] : '';
+
+        const fragment = document.createDocumentFragment();
+        if (leading) {
+            fragment.appendChild(document.createTextNode(leading));
+        }
+        fragment.appendChild(wrapper);
+        if (trailing) {
+            fragment.appendChild(document.createTextNode(trailing));
+        }
+
+        textNode.parentNode.replaceChild(fragment, textNode);
     }
 
     function processPrice(priceElement) {
         try {
-            const priceText = priceElement.textContent.trim();
-            // More flexible regex to handle different Euro price formats
-            const match = priceText.match(/€\s*([\d\.,]+)/);
-            if (!match) return;
-
-            // Handle comma as decimal separator in European format
-            const euroString = match[1].replace(',', '.');
-            const euroAmount = parseFloat(euroString);
-            
-            const decimals = match[1].includes('.') ? match[1].split('.')[1].length : 0;
-            const usdAmount = euroAmount * EUR_TO_USD_RATE;
-            const formattedUSD = formatUSD(usdAmount, decimals);
-
-            // Check if USD estimate already exists
-            let usdElement = null;
-            if (typeof priceElement.querySelector === 'function') {
-                usdElement = priceElement.querySelector(':scope > .usd-estimate');
-                if (!usdElement) {
-                    usdElement = priceElement.querySelector('.usd-estimate');
+            // Remove any legacy USD nodes we may have injected previously
+            priceElement.querySelectorAll('.usd-estimate').forEach(node => {
+                if (!node.closest('.price-switcher')) {
+                    node.remove();
                 }
-            }
-            if (!usdElement) {
-                // Create new USD estimate element
-                usdElement = document.createElement('span');
-                usdElement.className = 'usd-estimate';
-                priceElement.appendChild(usdElement);
-            } else if (usdElement.tagName !== 'SPAN') {
-                const replacement = document.createElement('span');
-                replacement.className = usdElement.className;
-                replacement.textContent = usdElement.textContent;
-                Array.from(usdElement.attributes).forEach(attr => replacement.setAttribute(attr.name, attr.value));
-                usdElement.replaceWith(replacement);
-                usdElement = replacement;
+            });
+
+            const directWrapper = priceElement.closest('.price-switcher');
+            if (directWrapper) {
+                updateWrapper(directWrapper);
+                return;
             }
 
-            // Update USD estimate
-            usdElement.textContent = `~$${formattedUSD}`;
-            usdElement.dataset.estimateAmount = formattedUSD;
-            usdElement.style.display = usdVisible ? 'inline-flex' : 'none';
-            usdElement.style.alignItems = 'baseline';
-
-            // Handle period text (e.g., "/mo" or "/h")
-            const periodElement = priceElement.querySelector('.price-period, .price-month-label');
-            if (periodElement) {
-                const periodText = periodElement.textContent.trim();
-
-                // === OPTION 1: Stack prices (uncomment this block to enable) ===
-                // usdElement.textContent = `~$${formattedUSD} ${periodText}`;
-                // periodElement.style.display = "none"; // Hide the original period
-
-                // === OPTION 2: Remove period from USD estimate (uncomment this block to enable) ===
-                usdElement.textContent = `~$${formattedUSD}`;
-                // Period will only be shown with Euro amount
-
-                // Move the original period element after the USD estimate
-                usdElement.parentNode.insertBefore(periodElement, usdElement.nextSibling);
+            const existingWrappers = priceElement.querySelectorAll(':scope .price-switcher');
+            if (existingWrappers.length > 0) {
+                existingWrappers.forEach(updateWrapper);
+                return;
             }
-            
-            // Show toggle button when conversions exist
-            showToggleButtonIfNeeded();
+
+            const euroTextNode = findEuroTextNode(priceElement);
+            if (!euroTextNode) {
+                return;
+            }
+
+            const nodeMatch = euroTextNode.textContent.match(/€\s*([\d\.,]+)/);
+            if (!nodeMatch) {
+                return;
+            }
+
+            const euroDigits = nodeMatch[1];
+            const euroDisplay = normalizeEuroDisplay(nodeMatch[0]);
+            const euroAmount = parseEuroAmount(euroDigits);
+            if (!Number.isFinite(euroAmount)) {
+                return;
+            }
+
+            const decimals = euroDigits.includes(',') || euroDigits.includes('.')
+                ? euroDigits.split(/[.,]/).pop().length
+                : 0;
+            const usdDisplay = formatUSD(euroAmount * EUR_TO_USD_RATE, decimals);
+
+            const wrapper = buildPriceWrapper(euroDisplay, usdDisplay, euroAmount, decimals);
+            insertWrapperForTextNode(euroTextNode, wrapper);
+            applyCurrencyViewToWrapper(wrapper);
         } catch (error) {
             console.warn('Error processing price element:', error, priceElement);
         }
@@ -269,15 +403,7 @@
 
         // Check if we should show the toggle button
         showToggleButtonIfNeeded();
-    }
-
-    function updateUSDVisibilityForAll() {
-        document.querySelectorAll('.usd-estimate').forEach(el => {
-            el.style.display = usdVisible ? 'inline-flex' : 'none';
-        });
-        if (toggleButton) {
-            toggleButton.textContent = usdVisible ? 'Hide USD' : 'Show USD';
-        }
+        applyCurrencyView();
     }
 
     async function promptForCustomRate() {
@@ -323,13 +449,24 @@
     function addStyles() {
         const styleElement = document.createElement('style');
         styleElement.textContent = `
+            .price-switcher {
+                display: inline-flex;
+                align-items: baseline;
+                gap: 0.35em;
+            }
+            .price-switcher__eur,
+            .price-switcher__usd {
+                font-size: 0.96em;
+            }
             .usd-estimate {
                 color: ${USD_COLOR};
-                margin-left: 6px;
-                font-size: 0.92em;
-                font-weight: 500;
-                padding: 0 4px;
-                border-radius: 3px;
+                font-weight: 600;
+            }
+            .price-switcher__usd::after {
+                content: ' USD';
+                font-size: 0.75em;
+                margin-left: 0.25em;
+                opacity: 0.7;
             }
         `;
         document.head.appendChild(styleElement);
@@ -338,7 +475,6 @@
     function addToggleButton(onConfigure) {
         const button = document.createElement('button');
         button.id = 'usd-toggle-button';
-        button.textContent = 'Show USD';
         button.style.position = "fixed";
         button.style.bottom = "10px";
         button.style.left = "50%"; // Center horizontally
@@ -353,8 +489,8 @@
         button.style.color = "#000";
         button.style.display = "none"; // Hidden by default
         button.title = onConfigure
-            ? 'Click to hide/show USD estimates. Hold Ctrl (or Cmd) while clicking to configure the exchange rate.'
-            : 'Click to hide/show USD estimates.';
+            ? 'Click to toggle displayed currency. Hold Ctrl (or Cmd) while clicking to configure the exchange rate.'
+            : 'Click to toggle displayed currency.';
 
         // Hover effect
         button.onmouseover = () => { 
@@ -371,13 +507,14 @@
                 return;
             }
 
-            usdVisible = !usdVisible;
-            updateUSDVisibilityForAll();
+            currentCurrency = currentCurrency === 'EUR' ? 'USD' : 'EUR';
+            applyCurrencyView();
+            updateToggleButtonLabel();
         });
-        
+
         document.body.appendChild(button);
         toggleButton = button;
-        updateUSDVisibilityForAll();
+        updateToggleButtonLabel();
         return button;
     }
 
@@ -388,7 +525,8 @@
         registerSettings();
         addStyles();
         addToggleButton(promptForCustomRate);
-        updateUSDVisibilityForAll();
+        applyCurrencyView();
+        showToggleButtonIfNeeded();
 
         const observer = new MutationObserver((mutations) => {
             mutations.forEach((mutation) => {
@@ -400,8 +538,22 @@
                     });
                 } else if (mutation.type === 'characterData') {
                     const targetElement = mutation.target.parentElement;
-                    if (targetElement && (targetElement.classList.contains('price-amount') || targetElement.classList.contains('col--price'))) {
+                    if (!targetElement) {
+                        return;
+                    }
+
+                    const wrapper = targetElement.closest('.price-switcher');
+                    if (wrapper) {
+                        updateWrapper(wrapper);
+                        showToggleButtonIfNeeded();
+                        applyCurrencyView();
+                        return;
+                    }
+
+                    if (targetElement.classList.contains('price-amount') || targetElement.classList.contains('col--price')) {
                         processPrice(targetElement);
+                        showToggleButtonIfNeeded();
+                        applyCurrencyView();
                     }
                 }
             });
