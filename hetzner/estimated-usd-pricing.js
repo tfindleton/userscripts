@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Hetzner Console - Estimated Euro to USD Converter
 // @namespace    http://tampermonkey.net/
-// @version      1.1.2
+// @version      1.1.3
 // @description  Appends estimated USD values below Euro amounts on console.hetzner.cloud without duplicating price periods.
 // @match        https://console.hetzner.cloud/*
 // @match        https://console.hetzner.com/*
@@ -461,12 +461,6 @@
             .usd-estimate {
                 color: ${USD_COLOR};
                 font-weight: 600;
-            }
-            .price-switcher__usd::after {
-                content: ' USD';
-                font-size: 0.75em;
-                margin-left: 0.25em;
-                opacity: 0.7;
             }
         `;
         document.head.appendChild(styleElement);
