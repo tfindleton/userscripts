@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Hetzner Console - Estimated Euro to USD Converter
 // @namespace    http://tampermonkey.net/
-// @version      1.1.0
+// @version      1.1.1
 // @description  Appends estimated USD values below Euro amounts on console.hetzner.cloud without duplicating price periods.
 // @match        https://console.hetzner.cloud/*
 // @match        https://console.hetzner.com/*
@@ -33,6 +33,8 @@
 
     let EUR_TO_USD_RATE = DEFAULT_EUR_TO_USD_RATE;
     let manualRateOverride = null;
+    let usdVisible = false;
+    let toggleButton = null;
 
     function parseStoredNumber(value) {
         if (value === null || value === undefined || value === '') {
@@ -142,13 +144,16 @@
         return amount.toFixed(Math.max(decimalPlaces, 2));
     }
 
+    function containsEuro(text) {
+        return typeof text === 'string' && text.includes('€');
+    }
+
     function showToggleButtonIfNeeded() {
-        const conversionsExist = document.querySelectorAll('.usd-estimate').length > 0;
-        const toggleButton = document.getElementById('usd-toggle-button');
-        
-        if (toggleButton) {
-            toggleButton.style.display = conversionsExist ? 'block' : 'none';
+        if (!toggleButton) {
+            return;
         }
+        const conversionsExist = document.querySelectorAll('.usd-estimate').length > 0;
+        toggleButton.style.display = conversionsExist ? 'block' : 'none';
     }
 
     function processPrice(priceElement) {
@@ -167,18 +172,32 @@
             const formattedUSD = formatUSD(usdAmount, decimals);
 
             // Check if USD estimate already exists
-            let usdElement = priceElement.querySelector('.usd-estimate');
+            let usdElement = null;
+            if (typeof priceElement.querySelector === 'function') {
+                usdElement = priceElement.querySelector(':scope > .usd-estimate');
+                if (!usdElement) {
+                    usdElement = priceElement.querySelector('.usd-estimate');
+                }
+            }
             if (!usdElement) {
                 // Create new USD estimate element
-                usdElement = document.createElement('div');
+                usdElement = document.createElement('span');
                 usdElement.className = 'usd-estimate';
-                usdElement.style.color = USD_COLOR;
-                usdElement.style.marginTop = '2px';
                 priceElement.appendChild(usdElement);
+            } else if (usdElement.tagName !== 'SPAN') {
+                const replacement = document.createElement('span');
+                replacement.className = usdElement.className;
+                replacement.textContent = usdElement.textContent;
+                Array.from(usdElement.attributes).forEach(attr => replacement.setAttribute(attr.name, attr.value));
+                usdElement.replaceWith(replacement);
+                usdElement = replacement;
             }
 
             // Update USD estimate
             usdElement.textContent = `~$${formattedUSD}`;
+            usdElement.dataset.estimateAmount = formattedUSD;
+            usdElement.style.display = usdVisible ? 'inline-flex' : 'none';
+            usdElement.style.alignItems = 'baseline';
 
             // Handle period text (e.g., "/mo" or "/h")
             const periodElement = priceElement.querySelector('.price-period, .price-month-label');
@@ -204,13 +223,61 @@
         }
     }
 
+    function collectPriceCandidates(container) {
+        const selectorList = [
+            '.price',
+            '.price-amount',
+            '.col--price',
+            '.col--price-monthly',
+            '.col--price-total',
+            '.col--price-upfront',
+            '.types-list__col--price-monthly',
+            '.types-list__col--price-total',
+            '.types-list__col--price-upfront',
+            '.usage-table__table-cell',
+            '.hc-table__foot-calc-sum',
+            '[class*="price"]'
+        ];
+
+        const candidates = new Set();
+        const selector = selectorList.join(', ');
+
+        if (typeof container.matches === 'function' && container.matches(selector)) {
+            candidates.add(container);
+        }
+
+        if (typeof container.querySelectorAll === 'function') {
+            container.querySelectorAll(selector).forEach(el => candidates.add(el));
+        }
+
+        return Array.from(candidates).filter(el => {
+            if (!(el instanceof Element)) {
+                return false;
+            }
+            if (el.closest('.usd-estimate')) {
+                return false;
+            }
+            return containsEuro(el.textContent);
+        });
+    }
+
     function processPrices(container) {
-        // Target various price elements
-        const priceElements = container.querySelectorAll('.price-amount, .col--price, .usage-table__table-cell:last-child, .hc-table__foot-calc-sum');
-        priceElements.forEach(processPrice);
-        
+        const candidates = collectPriceCandidates(container);
+        const filtered = candidates.filter(el => !candidates.some(other => other !== el && el.contains(other) && containsEuro(other.textContent)));
+
+        filtered.forEach(processPrice);
+
         // Check if we should show the toggle button
         showToggleButtonIfNeeded();
+    }
+
+    function updateUSDVisibilityForAll() {
+        document.querySelectorAll('.usd-estimate').forEach(el => {
+            el.style.display = usdVisible ? 'inline-flex' : 'none';
+        });
+        if (toggleButton) {
+            toggleButton.textContent = usdVisible ? 'Hide USD' : 'Show USD';
+        }
     }
 
     async function promptForCustomRate() {
@@ -258,9 +325,11 @@
         styleElement.textContent = `
             .usd-estimate {
                 color: ${USD_COLOR};
-                margin-top: 2px;
-                font-size: 0.9em;
-                opacity: 0.9;
+                margin-left: 6px;
+                font-size: 0.92em;
+                font-weight: 500;
+                padding: 0 4px;
+                border-radius: 3px;
             }
         `;
         document.head.appendChild(styleElement);
@@ -269,7 +338,7 @@
     function addToggleButton(onConfigure) {
         const button = document.createElement('button');
         button.id = 'usd-toggle-button';
-        button.textContent = "Hide USD";
+        button.textContent = 'Show USD';
         button.style.position = "fixed";
         button.style.bottom = "10px";
         button.style.left = "50%"; // Center horizontally
@@ -295,7 +364,6 @@
             button.style.opacity = "0.7";
         };
         
-        let enabled = true;
         button.addEventListener('click', async (event) => {
             if (onConfigure && (event.ctrlKey || event.metaKey)) {
                 event.preventDefault();
@@ -303,14 +371,14 @@
                 return;
             }
 
-            enabled = !enabled;
-            document.querySelectorAll('.usd-estimate').forEach(el => {
-                el.style.display = enabled ? 'block' : 'none';
-            });
-            button.textContent = enabled ? "Hide USD" : "Show USD";
+            usdVisible = !usdVisible;
+            updateUSDVisibilityForAll();
         });
         
         document.body.appendChild(button);
+        toggleButton = button;
+        updateUSDVisibilityForAll();
+        return button;
     }
 
     function initializeConversion() {
@@ -320,6 +388,7 @@
         registerSettings();
         addStyles();
         addToggleButton(promptForCustomRate);
+        updateUSDVisibilityForAll();
 
         const observer = new MutationObserver((mutations) => {
             mutations.forEach((mutation) => {
