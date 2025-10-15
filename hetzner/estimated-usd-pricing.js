@@ -1,17 +1,18 @@
 // ==UserScript==
 // @name         Hetzner Console - Estimated Euro to USD Converter
 // @namespace    http://tampermonkey.net/
-// @version      1.0.6
+// @version      1.1.0
 // @description  Appends estimated USD values below Euro amounts on console.hetzner.cloud without duplicating price periods.
 // @match        https://console.hetzner.cloud/*
+// @match        https://console.hetzner.com/*
 // @icon         https://console.hetzner.cloud/favicon-32x32.png
-// @grant        none
 // @run-at       document-end
 // @updateURL    https://raw.githubusercontent.com/tfindleton/userscripts/main/hetzner/estimated-usd-pricing.js
 // @downloadURL  https://raw.githubusercontent.com/tfindleton/userscripts/main/hetzner/estimated-usd-pricing.js
 // @grant        GM_registerMenuCommand
 // @grant        GM_setValue
 // @grant        GM_getValue
+// @grant        GM_deleteValue
 // ==/UserScript==
 
 (function() {
@@ -22,11 +23,94 @@
     const USD_COLOR = '#B2D9F5';
     const UPDATE_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours in ms
     const EXCHANGE_API_URL = 'https://api.exchangerate-api.com/v4/latest/EUR';
+    const STORAGE_PREFIX = 'hetzner_usd_converter_';
+    const STORAGE_KEYS = {
+        manualRate: `${STORAGE_PREFIX}manual_rate`
+    };
+    const hasGMStorage = typeof GM_getValue === 'function' && typeof GM_setValue === 'function';
+    const canDeleteGMValue = typeof GM_deleteValue === 'function';
     // ======================
 
     let EUR_TO_USD_RATE = DEFAULT_EUR_TO_USD_RATE;
+    let manualRateOverride = null;
 
-    async function updateExchangeRate() {
+    function parseStoredNumber(value) {
+        if (value === null || value === undefined || value === '') {
+            return null;
+        }
+        const parsed = parseFloat(String(value));
+        return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+    }
+
+    function readLocalStorage(key) {
+        try {
+            return window.localStorage ? window.localStorage.getItem(key) : null;
+        } catch (error) {
+            console.debug('LocalStorage read failed', error);
+            return null;
+        }
+    }
+
+    function writeLocalStorage(key, value) {
+        try {
+            if (!window.localStorage) {
+                return;
+            }
+            if (value === null) {
+                window.localStorage.removeItem(key);
+            } else {
+                window.localStorage.setItem(key, String(value));
+            }
+        } catch (error) {
+            console.debug('LocalStorage write failed', error);
+        }
+    }
+
+    function persistManualRate(value) {
+        if (hasGMStorage) {
+            try {
+                if (value === null) {
+                    if (canDeleteGMValue) {
+                        GM_deleteValue(STORAGE_KEYS.manualRate);
+                    } else {
+                        GM_setValue(STORAGE_KEYS.manualRate, null);
+                    }
+                } else {
+                    GM_setValue(STORAGE_KEYS.manualRate, value);
+                }
+            } catch (error) {
+                console.debug('GM storage write failed', error);
+            }
+        }
+        writeLocalStorage(STORAGE_KEYS.manualRate, value);
+    }
+
+    function loadManualRateOverride() {
+        let stored = null;
+        if (hasGMStorage) {
+            try {
+                stored = GM_getValue(STORAGE_KEYS.manualRate, null);
+            } catch (error) {
+                console.debug('GM storage read failed', error);
+            }
+        }
+        if (stored === null || stored === undefined || stored === '') {
+            stored = readLocalStorage(STORAGE_KEYS.manualRate);
+        }
+        const parsed = parseStoredNumber(stored);
+        if (parsed !== null) {
+            manualRateOverride = parsed;
+            EUR_TO_USD_RATE = parsed;
+            console.log(`Using manual exchange rate override: 1 EUR = ${EUR_TO_USD_RATE} USD`);
+        }
+    }
+
+    async function updateExchangeRate(force = false) {
+        if (!force && manualRateOverride !== null) {
+            console.log(`Manual exchange rate override active (${manualRateOverride}); skipping automatic update.`);
+            return;
+        }
+
         try {
             // Check if we need to update the rate (stored in localStorage)
             const savedRate = localStorage.getItem('eur_usd_rate');
@@ -129,16 +213,44 @@
         showToggleButtonIfNeeded();
     }
 
+    async function promptForCustomRate() {
+        const currentRate = manualRateOverride !== null ? manualRateOverride : EUR_TO_USD_RATE;
+        const message = 'Enter EUR to USD exchange rate (leave blank to use automatic updates):';
+        const userInput = prompt(message, currentRate.toString());
+        if (userInput === null) {
+            return;
+        }
+
+        const trimmed = userInput.trim();
+
+        if (trimmed === '') {
+            manualRateOverride = null;
+            persistManualRate(null);
+            await updateExchangeRate(true);
+            processPrices(document.body);
+            return;
+        }
+
+        const normalized = trimmed.replace(',', '.');
+        const parsed = parseFloat(normalized);
+
+        if (!Number.isFinite(parsed) || parsed <= 0) {
+            alert('Please enter a valid positive number.');
+            return;
+        }
+
+        manualRateOverride = parsed;
+        EUR_TO_USD_RATE = parsed;
+        persistManualRate(parsed);
+        processPrices(document.body);
+    }
+
     function registerSettings() {
-        GM_registerMenuCommand("Configure USD Converter", () => {
-            const newRate = prompt("Enter EUR to USD exchange rate:", GM_getValue("exchangeRate", DEFAULT_EUR_TO_USD_RATE));
-            if (newRate && !isNaN(parseFloat(newRate))) {
-                GM_setValue("exchangeRate", parseFloat(newRate));
-                EUR_TO_USD_RATE = parseFloat(newRate);
-                // Refresh prices
-                processPrices(document.body);
-            }
-        });
+        if (typeof GM_registerMenuCommand === 'function') {
+            GM_registerMenuCommand("Configure USD Converter", () => {
+                promptForCustomRate();
+            });
+        }
     }
 
     function addStyles() {
@@ -154,7 +266,7 @@
         document.head.appendChild(styleElement);
     }
 
-    function addToggleButton() {
+    function addToggleButton(onConfigure) {
         const button = document.createElement('button');
         button.id = 'usd-toggle-button';
         button.textContent = "Hide USD";
@@ -171,7 +283,10 @@
         button.style.cursor = "pointer"; // Hand cursor on hover
         button.style.color = "#000";
         button.style.display = "none"; // Hidden by default
-        
+        button.title = onConfigure
+            ? 'Click to hide/show USD estimates. Hold Ctrl (or Cmd) while clicking to configure the exchange rate.'
+            : 'Click to hide/show USD estimates.';
+
         // Hover effect
         button.onmouseover = () => { 
             button.style.opacity = "1.0";
@@ -181,23 +296,30 @@
         };
         
         let enabled = true;
-        button.onclick = () => {
+        button.addEventListener('click', async (event) => {
+            if (onConfigure && (event.ctrlKey || event.metaKey)) {
+                event.preventDefault();
+                await onConfigure();
+                return;
+            }
+
             enabled = !enabled;
             document.querySelectorAll('.usd-estimate').forEach(el => {
                 el.style.display = enabled ? 'block' : 'none';
             });
             button.textContent = enabled ? "Hide USD" : "Show USD";
-        };
+        });
         
         document.body.appendChild(button);
     }
 
     function initializeConversion() {
+        loadManualRateOverride();
         updateExchangeRate();
         processPrices(document.body);
         registerSettings();
         addStyles();
-        addToggleButton();
+        addToggleButton(promptForCustomRate);
 
         const observer = new MutationObserver((mutations) => {
             mutations.forEach((mutation) => {
