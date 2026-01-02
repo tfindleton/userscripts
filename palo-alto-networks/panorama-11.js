@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Panorama 11 - Highlight & Copy by Header (Multi-table version)
-// @version      2.3.3
+// @version      2.3.4
 // @description  Only style/copy on summary page. Finds columns by header text "Device Name"/"Serial Number", even if multiple <table> in the header.
 // @icon         https://pan.svpn.services/favicon.ico
 // @match        https://pan.svpn.services/*
@@ -59,6 +59,10 @@
   // The observer that will watch newly added nodes
   let observer = null;
 
+  // Batch DOM work to avoid reprocessing many times during ExtJS updates.
+  const pendingRoots = new Set();
+  let flushScheduled = false;
+
   // Start by checking current page and then watch hash changes
   window.addEventListener('hashchange', onHashChange);
   onHashChange(); // run once on initial load
@@ -104,7 +108,7 @@
     }
 
     observer = new MutationObserver(mutationCallback);
-    observer.observe(document.body, { childList: true, subtree: true });
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
   }
 
   /**
@@ -112,13 +116,73 @@
    */
   function mutationCallback(mutations) {
     for (const mutation of mutations) {
-      if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
+      if (mutation.type === 'childList') {
+        if (mutation.addedNodes.length === 0) continue;
+
+        // ExtJS often updates cell content by adding/removing text nodes, so
+        // always process the mutation target as well as any added nodes.
+        queueForProcessing(mutation.target);
         for (const node of mutation.addedNodes) {
-          if (node.nodeType === Node.ELEMENT_NODE) {
-            processExistingElements(node);
-          }
+          queueForProcessing(node);
         }
+        continue;
       }
+
+      if (mutation.type === 'characterData') {
+        queueForProcessing(mutation.target);
+      }
+    }
+  }
+
+  function getProcessingRoot(node) {
+    const el = node && node.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
+    if (!el) return null;
+
+    if (el.matches('.x-grid3-header, .x-grid3-row, .x-grid3-cell, .x-grid3')) {
+      return el;
+    }
+
+    return el.closest('.x-grid3-header, .x-grid3-row, .x-grid3-cell, .x-grid3');
+  }
+
+  function queueForProcessing(node) {
+    const root = getProcessingRoot(node);
+    if (!root) return;
+
+    pendingRoots.add(root);
+    scheduleFlush();
+  }
+
+  function scheduleFlush() {
+    if (flushScheduled) return;
+    flushScheduled = true;
+
+    requestAnimationFrame(() => {
+      flushScheduled = false;
+      flushPending();
+    });
+  }
+
+  function flushPending() {
+    if (pendingRoots.size === 0) return;
+
+    const roots = Array.from(pendingRoots);
+    pendingRoots.clear();
+
+    for (const root of roots) {
+      if (!root.isConnected) continue;
+
+      // Fast paths for the most common updates (single cell/row changes).
+      if (root.classList.contains('x-grid3-cell')) {
+        processCell(root);
+        continue;
+      }
+      if (root.classList.contains('x-grid3-row')) {
+        processRow(root);
+        continue;
+      }
+
+      processExistingElements(root);
     }
   }
 
@@ -134,10 +198,18 @@
       return;
     }
 
+    if (!root || root.nodeType !== Node.ELEMENT_NODE) {
+      return;
+    }
+
     // 1) If there's a .x-grid3-header, recalc columns for its grid
-    const headerElems = root.querySelectorAll
-      ? root.querySelectorAll('.x-grid3-header')
-      : [];
+    const headerElems = [];
+    if (root.matches('.x-grid3-header')) {
+      headerElems.push(root);
+    }
+    if (root.querySelectorAll) {
+      headerElems.push(...root.querySelectorAll('.x-grid3-header'));
+    }
     for (const headerEl of headerElems) {
       const grid = headerEl.closest('.x-grid3');
       if (grid) {
@@ -154,19 +226,31 @@
     }
 
     // 2) For any newly added .x-grid3-row, highlight/copy relevant columns
-    const rowElems = root.querySelectorAll
-      ? root.querySelectorAll('.x-grid3-row')
-      : [];
+    const rowElems = [];
+    if (root.matches('.x-grid3-row')) {
+      rowElems.push(root);
+    }
+    if (root.querySelectorAll) {
+      rowElems.push(...root.querySelectorAll('.x-grid3-row'));
+    }
     for (const rowEl of rowElems) {
       processRow(rowEl);
+    }
+
+    if (rowElems.length > 0) {
+      return;
     }
 
     // 3) It's also possible that an element might contain just a single cell
     //    or some piece of row. So check .x-grid3-cell directly, in case a partial row is added.
     //    (This might be uncommon, but let's be safe.)
-    const cellElems = root.querySelectorAll
-      ? root.querySelectorAll('.x-grid3-cell')
-      : [];
+    const cellElems = [];
+    if (root.matches('.x-grid3-cell')) {
+      cellElems.push(root);
+    }
+    if (root.querySelectorAll) {
+      cellElems.push(...root.querySelectorAll('.x-grid3-cell'));
+    }
     for (const cellEl of cellElems) {
       processCell(cellEl);
     }
@@ -316,15 +400,27 @@
     if (DEBUG) {
       console.log('[DEBUG] Checking status for cell text:', text);
     }
-    cellDiv.style.color = '';
-    cellDiv.style.fontWeight = '';
-    if (text === 'Disconnected') {
-      cellDiv.style.color = '#D94949';
-      cellDiv.style.fontWeight = 'bold';
-    } else if (text === 'Connected') {
-      cellDiv.style.color = '#1FAF2C';
-      cellDiv.style.fontWeight = 'bold';
+
+    let status = null;
+    if (/\bdisconnected\b/i.test(text)) {
+      status = 'disconnected';
+    } else if (/\bconnected\b/i.test(text)) {
+      status = 'connected';
     }
+
+    const prev = cellDiv.dataset.statusHighlight || '';
+    if (!status) {
+      if (!prev) return;
+      delete cellDiv.dataset.statusHighlight;
+      cellDiv.style.color = '';
+      cellDiv.style.fontWeight = '';
+      return;
+    }
+
+    if (prev === status) return;
+    cellDiv.dataset.statusHighlight = status;
+    cellDiv.style.fontWeight = 'bold';
+    cellDiv.style.color = status === 'connected' ? '#1FAF2C' : '#D94949';
   }
 
   /**
