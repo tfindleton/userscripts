@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GitHub - Open with Visual Studio Code
-// @version      0.0.1
+// @version      0.0.2
 // @description  Adds an "Open with Visual Studio Code" action to GitHub repo pages that clones the repo via the vscode:// protocol.
 // @icon         https://github.com/favicon.ico
 // @match        https://github.com/*/*
@@ -71,6 +71,21 @@
     setTimeout(() => a.remove(), 500);
   }
 
+  function onVsCodeActionClick(event) {
+    event.preventDefault();
+    const target = event.currentTarget;
+    if (!(target instanceof Element)) {
+      return;
+    }
+
+    const vscodeUrl = target.getAttribute("data-tf-vscode-url");
+    if (!vscodeUrl) {
+      return;
+    }
+
+    openProtocolUrl(vscodeUrl);
+  }
+
   function getActionItemLabel(item) {
     const label = item.querySelector('span[class*="ItemLabel"]');
     return (label?.textContent ?? item.textContent ?? "").replace(/\s+/g, " ").trim();
@@ -90,9 +105,10 @@
   }
 
   function findCodeActionLists() {
-    const scopedLists = Array.from(document.querySelectorAll(".react-overview-code-button-action-list ul"));
-    const candidates = scopedLists.length > 0 ? scopedLists : Array.from(document.querySelectorAll("ul"));
-    return candidates.filter(isCodeActionList);
+    const scopedLists = document.querySelectorAll(
+      "div.react-overview-code-button-action-list ul, div[class*='react-overview-code-button-action-list'] ul"
+    );
+    return Array.from(scopedLists).filter(isCodeActionList);
   }
 
   function sanitizeClonedItem(item) {
@@ -130,18 +146,7 @@
     return interactive;
   }
 
-  function createVsCodeActionItem(list, vscodeUrl, sshUrl) {
-    const templateItem =
-      findListItemByLabel(list, "Open with Visual Studio") ||
-      findListItemByLabel(list, "Open with GitHub Desktop");
-    if (!templateItem) {
-      return null;
-    }
-
-    const item = templateItem.cloneNode(true);
-    item.setAttribute("data-tf-open-vscode", "1");
-    sanitizeClonedItem(item);
-
+  function setVsCodeLeadingVisual(item, list) {
     // Replace whatever icon the template had with the VS Code application icon.
     // If the template item had no LeadingVisual slot (e.g. "Open with Visual Studio"),
     // create one by copying the class names from the GitHub Desktop item which does have one.
@@ -160,6 +165,7 @@
         }
       }
     }
+
     if (leadingVisual) {
       leadingVisual.innerHTML = "";
       const img = document.createElement("img");
@@ -168,25 +174,51 @@
       img.style.cssText = "width:16px;height:16px;vertical-align:middle;border-radius:2px;";
       leadingVisual.appendChild(img);
     }
+  }
+
+  function updateVsCodeActionItem(item, list, vscodeUrl, sshUrl) {
+    sanitizeClonedItem(item);
+    setVsCodeLeadingVisual(item, list);
 
     const interactive = normalizeInteractiveElement(item);
     if (!interactive) {
-      return null;
+      return false;
     }
 
-    interactive.setAttribute("type", "button");
-    interactive.removeAttribute("href");
-    interactive.title = `Clone in Visual Studio Code\n${sshUrl}`;
-    interactive.addEventListener("click", (event) => {
-      event.preventDefault();
-      openProtocolUrl(vscodeUrl);
-    });
+    // Reset any previously attached listeners to avoid stale repo URLs on navigation.
+    const freshInteractive = interactive.cloneNode(true);
+    interactive.replaceWith(freshInteractive);
+
+    freshInteractive.setAttribute("type", "button");
+    freshInteractive.removeAttribute("href");
+    freshInteractive.setAttribute("data-tf-open-vscode-trigger", "1");
+    freshInteractive.setAttribute("data-tf-vscode-url", vscodeUrl);
+    freshInteractive.title = `Clone in Visual Studio Code\n${sshUrl}`;
+    freshInteractive.addEventListener("click", onVsCodeActionClick);
 
     const label = item.querySelector('span[class*="ItemLabel"]');
     if (label) {
       label.textContent = "Open with Visual Studio Code";
     } else {
-      interactive.textContent = "Open with Visual Studio Code";
+      freshInteractive.textContent = "Open with Visual Studio Code";
+    }
+
+    return true;
+  }
+
+  function createVsCodeActionItem(list, vscodeUrl, sshUrl) {
+    const templateItem =
+      findListItemByLabel(list, "Open with Visual Studio") ||
+      findListItemByLabel(list, "Open with GitHub Desktop");
+    if (!templateItem) {
+      return null;
+    }
+
+    const item = templateItem.cloneNode(true);
+    item.setAttribute("data-tf-open-vscode", "1");
+
+    if (!updateVsCodeActionItem(item, list, vscodeUrl, sshUrl)) {
+      return null;
     }
 
     return item;
@@ -203,7 +235,9 @@
     let changed = false;
 
     for (const list of findCodeActionLists()) {
-      if (list.querySelector('[data-tf-open-vscode="1"]')) {
+      const existing = list.querySelector('[data-tf-open-vscode="1"]');
+      if (existing) {
+        updateVsCodeActionItem(existing, list, vscodeUrl, sshUrl);
         continue;
       }
 
@@ -250,23 +284,28 @@
       });
     };
 
-    scheduleInject();
+    const scheduleOpenBurst = () => {
+      scheduleInject();
+      const delays = [50, 150, 350, 700];
+      for (const delay of delays) {
+        setTimeout(scheduleInject, delay);
+      }
+    };
 
-    const obs = new MutationObserver(scheduleInject);
-    obs.observe(document.documentElement, { childList: true, subtree: true });
+    scheduleInject();
 
     // When GitHub toggles existing popovers without adding nodes, run once after click.
     document.addEventListener(
       "click",
       (event) => {
         if (isCodeButtonClick(event)) {
-          setTimeout(scheduleInject, 0);
+          scheduleOpenBurst();
         }
       },
       true
     );
 
-    document.addEventListener("turbo:render", scheduleInject);
+    document.addEventListener("turbo:render", scheduleOpenBurst);
   }
 
   start();
