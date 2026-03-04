@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GitHub - Open with Visual Studio Code
-// @version      0.0.2
+// @version      0.0.3
 // @description  Adds an "Open with Visual Studio Code" action to GitHub repo pages that clones the repo via the vscode:// protocol.
 // @icon         https://github.com/favicon.ico
 // @match        https://github.com/*/*
@@ -106,9 +106,15 @@
 
   function findCodeActionLists() {
     const scopedLists = document.querySelectorAll(
-      "div.react-overview-code-button-action-list ul, div[class*='react-overview-code-button-action-list'] ul"
+      ".react-overview-code-button-action-list ul, [class*='react-overview-code-button-action-list'] ul"
     );
-    return Array.from(scopedLists).filter(isCodeActionList);
+    const scopedMatches = Array.from(scopedLists).filter(isCodeActionList);
+    if (scopedMatches.length > 0) {
+      return scopedMatches;
+    }
+
+    // Fallback in case GitHub changes wrapper class names again.
+    return Array.from(document.querySelectorAll("ul")).filter(isCodeActionList);
   }
 
   function sanitizeClonedItem(item) {
@@ -258,21 +264,39 @@
     return changed;
   }
 
-  function isCodeButtonClick(event) {
+  function isLikelyCodeTrigger(event) {
     const target = event.target;
     if (!(target instanceof Element)) {
       return false;
     }
 
-    return Boolean(
-      target.closest(
-        'button[data-testid="code-button"], summary[data-testid="code-button"], button[aria-label="Code"], summary[aria-label="Code"], get-repo summary'
+    const trigger = target.closest("button, summary, a, [role='button']");
+    if (!trigger) {
+      return false;
+    }
+
+    if (
+      trigger.matches(
+        'button[data-testid="code-button"], summary[data-testid="code-button"], button[aria-label="Code"], summary[aria-label="Code"], [aria-label="Code"], get-repo summary'
       )
-    );
+    ) {
+      return true;
+    }
+
+    const ariaLabel = (trigger.getAttribute("aria-label") ?? "").trim();
+    if (ariaLabel === "Code") {
+      return true;
+    }
+
+    const text = (trigger.textContent ?? "").replace(/\s+/g, " ").trim();
+    return text === "Code";
   }
 
   function start() {
     let scheduled = false;
+    let openObserver = null;
+    let openObserverTimer = null;
+
     const scheduleInject = () => {
       if (scheduled) {
         return;
@@ -284,9 +308,29 @@
       });
     };
 
+    const stopOpenObserver = () => {
+      if (openObserver) {
+        openObserver.disconnect();
+        openObserver = null;
+      }
+      if (openObserverTimer !== null) {
+        clearTimeout(openObserverTimer);
+        openObserverTimer = null;
+      }
+    };
+
+    const startOpenObserver = (durationMs = 1600) => {
+      stopOpenObserver();
+
+      openObserver = new MutationObserver(scheduleInject);
+      openObserver.observe(document.documentElement, { childList: true, subtree: true });
+      openObserverTimer = window.setTimeout(stopOpenObserver, durationMs);
+    };
+
     const scheduleOpenBurst = () => {
       scheduleInject();
-      const delays = [50, 150, 350, 700];
+      startOpenObserver();
+      const delays = [50, 150, 350, 700, 1200];
       for (const delay of delays) {
         setTimeout(scheduleInject, delay);
       }
@@ -298,7 +342,7 @@
     document.addEventListener(
       "click",
       (event) => {
-        if (isCodeButtonClick(event)) {
+        if (isLikelyCodeTrigger(event)) {
           scheduleOpenBurst();
         }
       },
