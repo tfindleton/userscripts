@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GitHub - Open with Visual Studio Code
-// @version      0.0.3
+// @version      0.0.4
 // @description  Adds an "Open with Visual Studio Code" action to GitHub repo pages that clones the repo via the vscode:// protocol.
 // @icon         https://github.com/favicon.ico
 // @match        https://github.com/*/*
@@ -152,8 +152,42 @@
     return interactive;
   }
 
+  function createVsCodeIconElement() {
+    const svgNs = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(svgNs, "svg");
+    svg.setAttribute("class", "octicon");
+    svg.setAttribute("viewBox", "0 0 16 16");
+    svg.setAttribute("width", "16");
+    svg.setAttribute("height", "16");
+    svg.setAttribute("aria-hidden", "true");
+    svg.style.cssText = "display:inline-block;vertical-align:text-bottom;pointer-events:none;";
+
+    const leftDark = document.createElementNS(svgNs, "path");
+    leftDark.setAttribute("fill", "#0065A9");
+    leftDark.setAttribute(
+      "d",
+      "M11.33.85a1 1 0 0 1 1.13-.06l2.77 1.84A1.6 1.6 0 0 1 16 3.96v8.08c0 .53-.26 1.03-.7 1.33l-2.77 1.84a1 1 0 0 1-1.13-.06L5.72 10.7 3.07 12.7a.67.67 0 0 1-.83-.02L.83 11.43a.67.67 0 0 1 .02-1L3.35 8 .85 5.57a.67.67 0 0 1-.02-1l1.41-1.25a.67.67 0 0 1 .83-.02L5.72 5.3 11.33.85Z"
+    );
+
+    const leftLight = document.createElementNS(svgNs, "path");
+    leftLight.setAttribute("fill", "#007ACC");
+    leftLight.setAttribute(
+      "d",
+      "M11.4 15.15a1 1 0 0 0 1.13.06l2.77-1.84c.44-.3.7-.8.7-1.33V3.96c0-.53-.26-1.03-.7-1.33L12.53.79a1 1 0 0 0-1.13.06L5.72 5.3l6.2 2.7-6.2 2.7 5.68 4.45Z"
+    );
+
+    const rightBar = document.createElementNS(svgNs, "path");
+    rightBar.setAttribute("fill", "#1F9CF0");
+    rightBar.setAttribute("d", "M12 3.02A.5.5 0 0 0 11.17 2.64L6.1 7.1a.5.5 0 0 0 0 .8l5.07 4.46A.5.5 0 0 0 12 11.98V3.02Z");
+
+    svg.appendChild(leftDark);
+    svg.appendChild(leftLight);
+    svg.appendChild(rightBar);
+    return svg;
+  }
+
   function setVsCodeLeadingVisual(item, list) {
-    // Replace whatever icon the template had with the VS Code application icon.
+    // Replace whatever icon the template had with an inline VS Code SVG.
     // If the template item had no LeadingVisual slot (e.g. "Open with Visual Studio"),
     // create one by copying the class names from the GitHub Desktop item which does have one.
     let leadingVisual = item.querySelector('[class*="LeadingVisual"]');
@@ -174,11 +208,7 @@
 
     if (leadingVisual) {
       leadingVisual.innerHTML = "";
-      const img = document.createElement("img");
-      img.src = "https://code.visualstudio.com/favicon.ico";
-      img.alt = "Visual Studio Code";
-      img.style.cssText = "width:16px;height:16px;vertical-align:middle;border-radius:2px;";
-      leadingVisual.appendChild(img);
+      leadingVisual.appendChild(createVsCodeIconElement());
     }
   }
 
