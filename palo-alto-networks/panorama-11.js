@@ -1,16 +1,48 @@
 // ==UserScript==
 // @name         Panorama 11 - Highlight & Copy by Header (Multi-table version)
-// @version      2.3.4
-// @description  Only style/copy on summary page. Finds columns by header text "Device Name"/"Serial Number", even if multiple <table> in the header.
-// @icon         https://pan.svpn.services/favicon.ico
-// @match        https://pan.svpn.services/*
-// @grant        none
+// @version      2.4.0
+// @description  Only style/copy on summary page. Finds columns by header text "Device Name"/"Serial Number", even if multiple <table> in the header. Panorama URL is stored locally and never shared publicly.
+// @match        *://*/*
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_registerMenuCommand
 // @downloadURL  https://raw.githubusercontent.com/tfindleton/userscripts/refs/heads/main/palo-alto-networks/panorama-11.js
 // @updateURL    https://raw.githubusercontent.com/tfindleton/userscripts/refs/heads/main/palo-alto-networks/panorama-11.js
 // ==/UserScript==
 
 (function () {
   'use strict';
+
+  // ── URL Configuration ──────────────────────────────────────────────────────
+  // The Panorama host is stored locally in Tampermonkey storage so it is never
+  // included in the public script source. You will be prompted on first run.
+  // Use the Tampermonkey menu entry to change it at any time.
+  let storedHost = GM_getValue('panoramaHost', null);
+
+  function promptForHost() {
+    const input = prompt(
+      'Panorama 11 — Configure URL\nEnter your Panorama hostname (e.g. pan.example.com):',
+      storedHost || ''
+    );
+    if (input && input.trim()) {
+      // Strip any accidental scheme or path, store only the hostname.
+      storedHost = input.trim().replace(/^https?:\/\//, '').split('/')[0];
+      GM_setValue('panoramaHost', storedHost);
+      location.reload();
+    }
+  }
+
+  GM_registerMenuCommand('Configure Panorama URL…', promptForHost);
+
+  if (!storedHost) {
+    promptForHost();
+    return;
+  }
+
+  if (window.location.hostname !== storedHost) {
+    return; // Not the configured Panorama instance — exit immediately.
+  }
+  // ───────────────────────────────────────────────────────────────────────────
 
   const DEBUG = false; // Set to false in production to suppress debug logs.
 
