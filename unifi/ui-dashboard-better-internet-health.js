@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         UniFi Dashboard Better Internet Health
 // @namespace    https://unifi.ui.com/
-// @version      0.3.2
+// @version      0.3.3
 // @description  Better internet health for the UniFi dashboard
 // @match        https://unifi.ui.com/*
 // @match        https://*.ui.com/*
@@ -99,6 +99,22 @@
             ${TILE_SELECTOR},
             ${TILE_SELECTOR} * {
                 cursor: zoom-in !important;
+            }
+
+            ${TILE_SELECTOR} {
+                border-radius: 6px;
+                transition: outline-color 0.12s ease, filter 0.12s ease;
+            }
+
+            ${TILE_SELECTOR}:hover,
+            ${TILE_SELECTOR}:focus-within {
+                outline: 2px solid rgba(52, 139, 255, 0.55);
+                outline-offset: 3px;
+            }
+
+            ${TILE_SELECTOR}:hover [class*="StackedBar-withTooltip"],
+            ${TILE_SELECTOR}:focus-within [class*="StackedBar-withTooltip"] {
+                filter: brightness(1.08);
             }
 
             #${MODAL_ID} {
@@ -206,7 +222,7 @@
 
             .uf-ihd-summary {
                 display: grid;
-                grid-template-columns: repeat(5, minmax(0, 1fr));
+                grid-template-columns: repeat(6, minmax(0, 1fr));
                 gap: 10px;
                 margin-bottom: 16px;
             }
@@ -750,6 +766,14 @@
         });
 
         modal.querySelector(".uf-ihd-close").addEventListener("click", closeModal);
+        modal.querySelector(".uf-ihd-bar").addEventListener("click", handleSegmentClick);
+        modal.querySelector(".uf-ihd-bar").addEventListener("pointerover", handleSegmentPointerOver);
+        modal.querySelector(".uf-ihd-bar").addEventListener("pointerout", handleSegmentPointerOut);
+        modal.querySelector(".uf-ihd-bar").addEventListener("focusin", handleSegmentFocusIn);
+        modal.querySelector(".uf-ihd-bar").addEventListener("focusout", handleSegmentFocusOut);
+        modal.querySelector(".uf-ihd-bar").addEventListener("keydown", handleSegmentKeyDown);
+        modal.querySelector(".uf-ihd-events").addEventListener("click", handleEventRowClick);
+        modal.querySelector(".uf-ihd-body").addEventListener("scroll", handleModalBodyScroll, { passive: true });
 
         document.addEventListener("keydown", (event) => {
             if (event.key === "Escape" && !modal.hidden) {
@@ -834,16 +858,79 @@
                 barItem.style.backgroundColor ||
                 window.getComputedStyle(barItem).backgroundColor ||
                 COLOR_MAP.unknown.color;
+            const status = getStatusFromElement(barItem, color);
 
             return {
                 width: Number.isFinite(width) && width > 0 ? width : 1,
                 color,
+                status,
             };
         });
     }
 
     function normalizeColor(color) {
         return color.replace(/\s+/g, "").toLowerCase();
+    }
+
+    function getStatusText(element) {
+        const textParts = [];
+        let current = element;
+
+        for (let depth = 0; current && depth < 2; depth += 1) {
+            [
+                "aria-label",
+                "title",
+                "data-label",
+                "data-state",
+                "data-status",
+            ].forEach((attribute) => {
+                const value = current.getAttribute(attribute)?.trim();
+
+                if (value) {
+                    textParts.push(value);
+                }
+            });
+
+            const text = current.textContent?.trim();
+
+            if (text) {
+                textParts.push(text);
+            }
+
+            current = current.parentElement;
+        }
+
+        return textParts.join(" ");
+    }
+
+    function getStatusFromText(text) {
+        const normalized = text.replace(/\s+/g, " ").trim().toLowerCase();
+
+        if (!normalized) {
+            return null;
+        }
+
+        if (normalized.includes("disconnected")) {
+            return COLOR_MAP.disconnected;
+        }
+
+        if (normalized.includes("latency")) {
+            return COLOR_MAP.latency;
+        }
+
+        if (normalized.includes("site offline") || normalized.includes("no data") || /\boffline\b/.test(normalized)) {
+            return COLOR_MAP.offline;
+        }
+
+        if (normalized.includes("healthy")) {
+            return COLOR_MAP.healthy;
+        }
+
+        return null;
+    }
+
+    function getStatusFromElement(element, color) {
+        return getStatusFromText(getStatusText(element)) || getStatusFromColor(color);
     }
 
     function getStatusFromColor(color) {
@@ -953,7 +1040,7 @@
 
             const start = new Date(timeline.start.getTime() + elapsed);
             const end = new Date(timeline.start.getTime() + elapsed + durationMilliseconds);
-            const status = getStatusFromColor(rawSegment.color);
+            const status = rawSegment.status || getStatusFromColor(rawSegment.color);
 
             elapsed += durationMilliseconds;
 
@@ -965,7 +1052,7 @@
                 durationMilliseconds: Math.max(0, durationMilliseconds),
                 width: rawSegment.width,
                 percentage: (rawSegment.width / totalWeight) * 100,
-                color: status.color,
+                color: rawSegment.color || status.color,
                 label: status.label,
                 shortLabel: status.shortLabel,
                 sort: status.sort,
@@ -1015,6 +1102,7 @@
 
     function summarizeSegments(segments) {
         const disconnectedMs = sumDuration(segments, "Internet Disconnected");
+        const latencyMs = sumDuration(segments, "High Latency Detected");
         const offlineMs = segments
             .filter((segment) => segment.label === "Site Offline / No Data")
             .reduce((total, segment) => total + segment.durationMilliseconds, 0);
@@ -1024,6 +1112,7 @@
         return {
             current: currentSegment?.label || "Unknown",
             disconnected: disconnectedMs > 0 ? formatDuration(disconnectedMs) : "None",
+            latency: latencyMs > 0 ? formatDuration(latencyMs) : "None",
             offline: offlineMs > 0 ? formatDuration(offlineMs) : "None",
             events: String(eventCount),
         };
@@ -1058,6 +1147,7 @@
         modal.querySelector(".uf-ihd-summary").replaceChildren(
             createSummaryCard("Current", summary.current),
             createSummaryCard("Disconnected", summary.disconnected),
+            createSummaryCard("High Latency", summary.latency),
             createSummaryCard("Offline / No Data", summary.offline),
             createSummaryCard("Events", summary.events),
             createSummaryCard("Severity", severity)
@@ -1073,7 +1163,7 @@
         );
 
         modal.querySelector(".uf-ihd-bar").replaceChildren(
-            ...model.segments.map((segment) => createSegmentButton(segment, model.segments))
+            ...model.segments.map((segment) => createSegmentButton(segment))
         );
 
         modal.querySelector(".uf-ihd-legend").replaceChildren(
@@ -1244,30 +1334,10 @@
         tooltip.style.visibility = "";
     }
 
-    function showSelectedSegmentTooltip(modal) {
-        const segments = getModalSegments(modal);
-        const segment = selectedSegmentIndex === null || selectedSegmentIndex === undefined
-            ? null
-            : segments[selectedSegmentIndex];
-        const button = segment ? getSegmentButton(modal, segment.index) : null;
-
-        if (!segment || !button) {
-            hideSegmentTooltip(modal);
-            return;
-        }
-
-        showSegmentTooltip(button, segment);
-    }
-
     function restoreSelectedSegmentTooltip(button) {
         const modal = button.closest(`#${MODAL_ID}`);
 
-        if (selectedSegmentIndex === null || selectedSegmentIndex === undefined) {
-            hideSegmentTooltip(modal);
-            return;
-        }
-
-        showSelectedSegmentTooltip(modal);
+        hideSegmentTooltip(modal);
     }
 
     function updateVisibleSegmentTooltip(modal) {
@@ -1278,7 +1348,7 @@
         const button = segment ? getSegmentButton(modal, segment.index) : null;
 
         if (!segment || !button) {
-            showSelectedSegmentTooltip(modal);
+            hideSegmentTooltip(modal);
             return;
         }
 
@@ -1296,7 +1366,149 @@
         });
     }
 
-    function createSegmentButton(segment, allSegments) {
+    function getSegmentIndexFromElement(element) {
+        const segmentIndex = Number.parseInt(element?.dataset?.segmentIndex || "", 10);
+
+        return Number.isFinite(segmentIndex) ? segmentIndex : null;
+    }
+
+    function getSegmentByIndex(modal, segmentIndex) {
+        return getModalSegments(modal).find((segment) => segment.index === segmentIndex) || null;
+    }
+
+    function getSegmentButtonFromEvent(event) {
+        const button = event.target.closest?.(".uf-ihd-segment");
+        const bar = event.currentTarget;
+
+        return button && bar.contains(button) ? button : null;
+    }
+
+    function getEventRowFromEvent(event) {
+        const row = event.target.closest?.(".uf-ihd-event-row");
+        const eventsElement = event.currentTarget;
+
+        return row && eventsElement.contains(row) ? row : null;
+    }
+
+    function handleSegmentClick(event) {
+        const button = getSegmentButtonFromEvent(event);
+        const modal = button?.closest(`#${MODAL_ID}`);
+        const segmentIndex = getSegmentIndexFromElement(button);
+        const segment = segmentIndex === null ? null : getSegmentByIndex(modal, segmentIndex);
+
+        if (!button || !modal || !segment) {
+            return;
+        }
+
+        toggleSelectedSegment(segment.index, getModalSegments(modal));
+
+        if (button.matches(":hover") || button === document.activeElement) {
+            showSegmentTooltip(button, segment);
+        }
+    }
+
+    function handleSegmentPointerOver(event) {
+        const button = getSegmentButtonFromEvent(event);
+        const modal = button?.closest(`#${MODAL_ID}`);
+        const segmentIndex = getSegmentIndexFromElement(button);
+        const segment = segmentIndex === null ? null : getSegmentByIndex(modal, segmentIndex);
+
+        if (!button || !segment || button.contains(event.relatedTarget)) {
+            return;
+        }
+
+        showSegmentTooltip(button, segment);
+    }
+
+    function handleSegmentPointerOut(event) {
+        const button = getSegmentButtonFromEvent(event);
+
+        if (!button || button.contains(event.relatedTarget)) {
+            return;
+        }
+
+        restoreSelectedSegmentTooltip(button);
+    }
+
+    function handleSegmentFocusIn(event) {
+        const button = getSegmentButtonFromEvent(event);
+        const modal = button?.closest(`#${MODAL_ID}`);
+        const segmentIndex = getSegmentIndexFromElement(button);
+        const segment = segmentIndex === null ? null : getSegmentByIndex(modal, segmentIndex);
+
+        if (!button || !segment) {
+            return;
+        }
+
+        showSegmentTooltip(button, segment);
+    }
+
+    function handleSegmentFocusOut(event) {
+        const button = getSegmentButtonFromEvent(event);
+
+        if (!button) {
+            return;
+        }
+
+        restoreSelectedSegmentTooltip(button);
+    }
+
+    function focusSegmentByIndex(modal, segmentIndex) {
+        const segment = getSegmentByIndex(modal, segmentIndex);
+        const button = segment ? getSegmentButton(modal, segment.index) : null;
+
+        if (!segment || !button) {
+            return;
+        }
+
+        button.focus();
+        showSegmentTooltip(button, segment);
+    }
+
+    function handleSegmentKeyDown(event) {
+        if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
+            return;
+        }
+
+        const button = getSegmentButtonFromEvent(event);
+        const modal = button?.closest(`#${MODAL_ID}`);
+        const segments = getModalSegments(modal);
+        const currentSegmentIndex = getSegmentIndexFromElement(button);
+        const currentArrayIndex = segments.findIndex((segment) => segment.index === currentSegmentIndex);
+
+        if (!button || !modal || currentArrayIndex < 0) {
+            return;
+        }
+
+        let nextArrayIndex = currentArrayIndex;
+
+        if (event.key === "ArrowLeft") {
+            nextArrayIndex = Math.max(0, currentArrayIndex - 1);
+        } else if (event.key === "ArrowRight") {
+            nextArrayIndex = Math.min(segments.length - 1, currentArrayIndex + 1);
+        } else if (event.key === "Home") {
+            nextArrayIndex = 0;
+        } else if (event.key === "End") {
+            nextArrayIndex = segments.length - 1;
+        }
+
+        event.preventDefault();
+        focusSegmentByIndex(modal, segments[nextArrayIndex].index);
+    }
+
+    function handleEventRowClick(event) {
+        const row = getEventRowFromEvent(event);
+        const modal = row?.closest(`#${MODAL_ID}`);
+        const segmentIndex = getSegmentIndexFromElement(row);
+
+        if (!row || !modal || segmentIndex === null) {
+            return;
+        }
+
+        toggleSelectedSegment(segmentIndex, getModalSegments(modal));
+    }
+
+    function createSegmentButton(segment) {
         const button = document.createElement("button");
         button.type = "button";
         button.className = "uf-ihd-segment";
@@ -1309,32 +1521,6 @@
             "aria-label",
             `${segment.label}, ${getRangeText(segment)}, ${formatDuration(segment.durationMilliseconds)}`
         );
-
-        button.addEventListener("click", () => {
-            const wasSelected = selectedSegmentIndex === segment.index;
-
-            toggleSelectedSegment(segment.index, allSegments);
-
-            if (wasSelected && (button.matches(":hover") || button === document.activeElement)) {
-                showSegmentTooltip(button, segment);
-            }
-        });
-
-        button.addEventListener("pointerenter", () => {
-            showSegmentTooltip(button, segment);
-        });
-
-        button.addEventListener("pointerleave", () => {
-            restoreSelectedSegmentTooltip(button);
-        });
-
-        button.addEventListener("focus", () => {
-            showSegmentTooltip(button, segment);
-        });
-
-        button.addEventListener("blur", () => {
-            restoreSelectedSegmentTooltip(button);
-        });
 
         const visibleLabel = document.createElement("span");
         visibleLabel.className = "uf-ihd-segment-label";
@@ -1368,22 +1554,18 @@
 
     function renderEvents(modal, segments) {
         const eventsElement = modal.querySelector(".uf-ihd-events");
-        const rows = segments.map((segment) => createEventRow(segment, segments));
+        const rows = segments.map((segment) => createEventRow(segment));
 
         eventsElement.replaceChildren(...rows);
     }
 
-    function createEventRow(segment, allSegments) {
+    function createEventRow(segment) {
         const row = document.createElement("button");
         row.type = "button";
         row.className = "uf-ihd-event-row";
         row.dataset.segmentIndex = String(segment.index);
         row.dataset.selected = segment.index === selectedSegmentIndex ? "true" : "false";
         row.style.setProperty("--uf-ihd-segment-color", segment.color);
-
-        row.addEventListener("click", () => {
-            toggleSelectedSegment(segment.index, allSegments);
-        });
 
         const status = document.createElement("div");
         status.className = "uf-ihd-event-status";
@@ -1453,7 +1635,8 @@
             createDetailItem("End", formatTime(selectedSegment.end)),
             createDetailItem("Range", getRangeText(selectedSegment)),
             createDetailItem("Duration", formatDuration(selectedSegment.durationMilliseconds)),
-            createDetailItem("Share", `${selectedSegment.percentage.toFixed(1)}% of visible range`)
+            createDetailItem("Share", `${selectedSegment.percentage.toFixed(1)}% of visible range`),
+            createDetailItem("Timing", "Estimated from visible timeline")
         );
 
         status.append(dot, statusText);
@@ -1491,7 +1674,7 @@
         });
 
         renderSelectedDetails(modal, segments);
-        showSelectedSegmentTooltip(modal);
+        hideSegmentTooltip(modal);
     }
 
     function handleDocumentClick(event) {
@@ -1525,6 +1708,12 @@
         }
 
         scheduleVisibleTooltipUpdate(modal);
+    }
+
+    function handleModalBodyScroll(event) {
+        const modal = event.currentTarget.closest(`#${MODAL_ID}`);
+
+        hideSegmentTooltip(modal);
     }
 
     function boot() {
