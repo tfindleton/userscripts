@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         UniFi Dashboard Better Internet Health
 // @namespace    https://unifi.ui.com/
-// @version      0.1
+// @version      0.2
 // @description  Better internet health for the UniFi dashboard
 // @match        https://unifi.ui.com/*
 // @match        https://*.ui.com/*
@@ -18,6 +18,8 @@
 
     const MODAL_ID = "uf-ihd-modal-overlay";
     const STYLE_ID = "uf-ihd-modal-style";
+    const TOOLTIP_BOUNDARY_GAP = 0;
+    const TOOLTIP_ARROW_GAP = 10;
 
     const OLD_MODAL_IDS = [
         "uf-health-modal-overlay",
@@ -329,9 +331,10 @@
                 position: absolute;
                 left: 50%;
                 bottom: calc(100% + 12px);
-                transform: translateX(-50%);
-                min-width: 210px;
-                max-width: 290px;
+                transform: translateX(calc(-50% + var(--uf-ihd-tooltip-shift, 0px)));
+                box-sizing: border-box;
+                min-width: min(210px, calc(100vw - 72px));
+                max-width: min(290px, calc(100vw - 72px));
                 padding: 11px 12px 10px;
                 display: none;
                 border-radius: 6px;
@@ -346,7 +349,7 @@
             .uf-ihd-tooltip::after {
                 content: "";
                 position: absolute;
-                left: 50%;
+                left: var(--uf-ihd-tooltip-arrow-left, 50%);
                 top: 100%;
                 transform: translateX(-50%);
                 border-left: 7px solid transparent;
@@ -1090,6 +1093,77 @@
         return card;
     }
 
+    function clampValue(value, minimum, maximum) {
+        if (maximum < minimum) {
+            return minimum;
+        }
+
+        return Math.min(Math.max(value, minimum), maximum);
+    }
+
+    function measureTooltip(tooltip) {
+        const visibleRect = tooltip.getBoundingClientRect();
+
+        if (visibleRect.width > 0 && visibleRect.height > 0) {
+            return visibleRect;
+        }
+
+        const previousDisplay = tooltip.style.display;
+        const previousVisibility = tooltip.style.visibility;
+
+        tooltip.style.display = "block";
+        tooltip.style.visibility = "hidden";
+
+        const measuredRect = tooltip.getBoundingClientRect();
+
+        tooltip.style.display = previousDisplay;
+        tooltip.style.visibility = previousVisibility;
+
+        return measuredRect;
+    }
+
+    function positionSegmentTooltip(button) {
+        const tooltip = button.querySelector(".uf-ihd-tooltip");
+        const shell = button.closest(".uf-ihd-bar-shell");
+
+        if (!tooltip || !shell) {
+            return;
+        }
+
+        const segmentRect = button.getBoundingClientRect();
+        const shellRect = shell.getBoundingClientRect();
+        const tooltipRect = measureTooltip(tooltip);
+        const tooltipWidth = tooltipRect.width || 210;
+
+        if (segmentRect.width <= 0 || shellRect.width <= 0) {
+            return;
+        }
+
+        const anchorX = segmentRect.left + (segmentRect.width / 2);
+        const minimumLeft = shellRect.left + TOOLTIP_BOUNDARY_GAP;
+        const maximumRight = shellRect.right - TOOLTIP_BOUNDARY_GAP;
+        const unclampedLeft = anchorX - (tooltipWidth / 2);
+        const maximumLeft = maximumRight - tooltipWidth;
+        const clampedLeft = maximumLeft < minimumLeft
+            ? minimumLeft + ((maximumRight - minimumLeft - tooltipWidth) / 2)
+            : clampValue(unclampedLeft, minimumLeft, maximumLeft);
+        const shift = clampedLeft - unclampedLeft;
+        const arrowLeft = clampValue(
+            (tooltipWidth / 2) - shift,
+            TOOLTIP_ARROW_GAP,
+            tooltipWidth - TOOLTIP_ARROW_GAP
+        );
+
+        tooltip.style.setProperty("--uf-ihd-tooltip-shift", `${Math.round(shift)}px`);
+        tooltip.style.setProperty("--uf-ihd-tooltip-arrow-left", `${Math.round(arrowLeft)}px`);
+    }
+
+    function updateVisibleSegmentTooltips(root = document) {
+        root
+            .querySelectorAll(".uf-ihd-segment:hover, .uf-ihd-segment:focus, .uf-ihd-segment[data-selected=\"true\"]")
+            .forEach((button) => positionSegmentTooltip(button));
+    }
+
     function createSegmentButton(segment, allSegments) {
         const button = document.createElement("button");
         button.type = "button";
@@ -1106,6 +1180,15 @@
 
         button.addEventListener("click", () => {
             toggleSelectedSegment(segment.index, allSegments);
+            positionSegmentTooltip(button);
+        });
+
+        button.addEventListener("pointerenter", () => {
+            positionSegmentTooltip(button);
+        });
+
+        button.addEventListener("focus", () => {
+            positionSegmentTooltip(button);
         });
 
         const visibleLabel = document.createElement("span");
@@ -1294,6 +1377,7 @@
         });
 
         renderSelectedDetails(modal, segments);
+        updateVisibleSegmentTooltips(modal);
     }
 
     function handleDocumentClick(event) {
@@ -1319,6 +1403,16 @@
         tile.setAttribute("title", "Click to enlarge internet health details");
     }
 
+    function handleWindowResize() {
+        const modal = document.getElementById(MODAL_ID);
+
+        if (!modal || modal.hidden) {
+            return;
+        }
+
+        updateVisibleSegmentTooltips(modal);
+    }
+
     function boot() {
         removeOldUi();
         installStyles();
@@ -1326,9 +1420,11 @@
 
         document.removeEventListener("click", handleDocumentClick, true);
         document.removeEventListener("pointerdown", handleDocumentPointerDown, true);
+        window.removeEventListener("resize", handleWindowResize);
 
         document.addEventListener("click", handleDocumentClick, true);
         document.addEventListener("pointerdown", handleDocumentPointerDown, true);
+        window.addEventListener("resize", handleWindowResize);
     }
 
     boot();
