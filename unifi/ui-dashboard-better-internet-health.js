@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         UniFi Dashboard Better Internet Health
 // @namespace    https://unifi.ui.com/
-// @version      0.3
+// @version      0.3.1
 // @description  Better internet health for the UniFi dashboard
 // @match        https://unifi.ui.com/*
 // @match        https://*.ui.com/*
@@ -65,6 +65,8 @@
     };
 
     let selectedSegmentIndex = null;
+    let activeTooltipSegmentIndex = null;
+    let tooltipUpdateFrame = null;
 
     function removeOldUi() {
         OLD_MODAL_IDS.forEach((id) => {
@@ -94,8 +96,9 @@
         const style = document.createElement("style");
         style.id = STYLE_ID;
         style.textContent = `
-            ${TILE_SELECTOR} {
-                cursor: zoom-in !important;
+            ${TILE_SELECTOR},
+            ${TILE_SELECTOR} * {
+                cursor: pointer !important;
             }
 
             #${MODAL_ID} {
@@ -108,7 +111,6 @@
                 padding: 24px;
                 box-sizing: border-box;
                 background: rgba(0, 0, 0, 0.58);
-                backdrop-filter: blur(3px);
                 color: rgb(235, 238, 242);
                 font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
             }
@@ -334,10 +336,10 @@
             }
 
             .uf-ihd-tooltip {
-                position: absolute;
-                left: 50%;
-                bottom: calc(100% + 12px);
-                transform: translateX(calc(-50% + var(--uf-ihd-tooltip-shift, 0px)));
+                position: fixed;
+                left: var(--uf-ihd-tooltip-left, 50vw);
+                top: var(--uf-ihd-tooltip-top, 0px);
+                transform: translate(-50%, -100%);
                 box-sizing: border-box;
                 min-width: min(210px, calc(100vw - 72px));
                 max-width: min(290px, calc(100vw - 72px));
@@ -363,9 +365,7 @@
                 border-top: 7px solid rgb(35, 38, 44);
             }
 
-            .uf-ihd-segment:hover .uf-ihd-tooltip,
-            .uf-ihd-segment:focus-visible .uf-ihd-tooltip,
-            .uf-ihd-segment[data-selected="true"] .uf-ihd-tooltip {
+            .uf-ihd-tooltip[data-visible="true"] {
                 display: block;
             }
 
@@ -701,6 +701,18 @@
                         </div>
                         <div class="uf-ihd-bar-shell">
                             <div class="uf-ihd-bar"></div>
+                            <div class="uf-ihd-tooltip" data-visible="false" aria-hidden="true">
+                                <div class="uf-ihd-tooltip-title">
+                                    <span class="uf-ihd-tooltip-dot"></span>
+                                    <span class="uf-ihd-tooltip-title-text"></span>
+                                </div>
+                                <div class="uf-ihd-tooltip-times">
+                                    <span class="uf-ihd-tooltip-start"></span>
+                                    <span>-</span>
+                                    <span class="uf-ihd-tooltip-end"></span>
+                                </div>
+                                <div class="uf-ihd-tooltip-duration"></div>
+                            </div>
                             <div class="uf-ihd-axis"></div>
                         </div>
                         <div class="uf-ihd-legend"></div>
@@ -1033,8 +1045,11 @@
         const summary = summarizeSegments(model.segments);
 
         selectedSegmentIndex = null;
+        activeTooltipSegmentIndex = null;
 
         modal.dataset.siteName = siteName;
+        modal.ufIhdSegments = model.segments;
+        hideSegmentTooltip(modal);
 
         modal.querySelector(".uf-ihd-title").textContent = `${siteName} Internet Health`;
         modal.querySelector(".uf-ihd-subtitle").textContent =
@@ -1086,6 +1101,14 @@
         modal.hidden = true;
         document.body.style.overflow = "";
         selectedSegmentIndex = null;
+        activeTooltipSegmentIndex = null;
+
+        if (tooltipUpdateFrame !== null) {
+            window.cancelAnimationFrame(tooltipUpdateFrame);
+            tooltipUpdateFrame = null;
+        }
+
+        hideSegmentTooltip(modal);
     }
 
     function createSummaryCard(label, value) {
@@ -1133,8 +1156,46 @@
         return measuredRect;
     }
 
+    function setTooltipVisibility(tooltip, isVisible) {
+        tooltip.dataset.visible = isVisible ? "true" : "false";
+        tooltip.setAttribute("aria-hidden", isVisible ? "false" : "true");
+    }
+
+    function getModalSegments(modal) {
+        return modal?.ufIhdSegments || [];
+    }
+
+    function getSegmentButton(modal, segmentIndex) {
+        return modal?.querySelector(`.uf-ihd-segment[data-segment-index="${segmentIndex}"]`) || null;
+    }
+
+    function getSegmentTooltip(modal) {
+        return modal?.querySelector(".uf-ihd-tooltip") || null;
+    }
+
+    function hideSegmentTooltip(modal) {
+        const tooltip = getSegmentTooltip(modal);
+
+        if (!tooltip) {
+            return;
+        }
+
+        activeTooltipSegmentIndex = null;
+        setTooltipVisibility(tooltip, false);
+    }
+
+    function updateTooltipContent(tooltip, segment) {
+        tooltip.style.setProperty("--uf-ihd-segment-color", segment.color);
+        tooltip.querySelector(".uf-ihd-tooltip-title-text").textContent = segment.label;
+        tooltip.querySelector(".uf-ihd-tooltip-start").textContent = formatTime(segment.start);
+        tooltip.querySelector(".uf-ihd-tooltip-end").textContent = formatTime(segment.end);
+        tooltip.querySelector(".uf-ihd-tooltip-duration").textContent =
+            `Duration: ${formatDuration(segment.durationMilliseconds)}`;
+    }
+
     function positionSegmentTooltip(button) {
-        const tooltip = button.querySelector(".uf-ihd-tooltip");
+        const modal = button.closest(`#${MODAL_ID}`);
+        const tooltip = getSegmentTooltip(modal);
         const shell = button.closest(".uf-ihd-bar-shell");
 
         if (!tooltip || !shell) {
@@ -1151,28 +1212,88 @@
         }
 
         const anchorX = segmentRect.left + (segmentRect.width / 2);
-        const minimumLeft = shellRect.left + TOOLTIP_BOUNDARY_GAP;
-        const maximumRight = shellRect.right - TOOLTIP_BOUNDARY_GAP;
-        const unclampedLeft = anchorX - (tooltipWidth / 2);
-        const maximumLeft = maximumRight - tooltipWidth;
-        const clampedLeft = maximumLeft < minimumLeft
-            ? minimumLeft + ((maximumRight - minimumLeft - tooltipWidth) / 2)
-            : clampValue(unclampedLeft, minimumLeft, maximumLeft);
-        const shift = clampedLeft - unclampedLeft;
+        const minimumCenter = shellRect.left + (tooltipWidth / 2) + TOOLTIP_BOUNDARY_GAP;
+        const maximumCenter = shellRect.right - (tooltipWidth / 2) - TOOLTIP_BOUNDARY_GAP;
+        const tooltipCenter = maximumCenter < minimumCenter
+            ? shellRect.left + (shellRect.width / 2)
+            : clampValue(anchorX, minimumCenter, maximumCenter);
         const arrowLeft = clampValue(
-            (tooltipWidth / 2) - shift,
+            anchorX - tooltipCenter + (tooltipWidth / 2),
             TOOLTIP_ARROW_GAP,
             tooltipWidth - TOOLTIP_ARROW_GAP
         );
 
-        tooltip.style.setProperty("--uf-ihd-tooltip-shift", `${Math.round(shift)}px`);
+        tooltip.style.setProperty("--uf-ihd-tooltip-left", `${Math.round(tooltipCenter)}px`);
+        tooltip.style.setProperty("--uf-ihd-tooltip-top", `${Math.round(segmentRect.top - 12)}px`);
         tooltip.style.setProperty("--uf-ihd-tooltip-arrow-left", `${Math.round(arrowLeft)}px`);
     }
 
-    function updateVisibleSegmentTooltips(root = document) {
-        root
-            .querySelectorAll(".uf-ihd-segment:hover, .uf-ihd-segment:focus, .uf-ihd-segment[data-selected=\"true\"]")
-            .forEach((button) => positionSegmentTooltip(button));
+    function showSegmentTooltip(button, segment) {
+        const modal = button.closest(`#${MODAL_ID}`);
+        const tooltip = getSegmentTooltip(modal);
+
+        if (!tooltip) {
+            return;
+        }
+
+        activeTooltipSegmentIndex = segment.index;
+        updateTooltipContent(tooltip, segment);
+        setTooltipVisibility(tooltip, true);
+        tooltip.style.visibility = "hidden";
+        positionSegmentTooltip(button);
+        tooltip.style.visibility = "";
+    }
+
+    function showSelectedSegmentTooltip(modal) {
+        const segments = getModalSegments(modal);
+        const segment = selectedSegmentIndex === null || selectedSegmentIndex === undefined
+            ? null
+            : segments[selectedSegmentIndex];
+        const button = segment ? getSegmentButton(modal, segment.index) : null;
+
+        if (!segment || !button) {
+            hideSegmentTooltip(modal);
+            return;
+        }
+
+        showSegmentTooltip(button, segment);
+    }
+
+    function restoreSelectedSegmentTooltip(button) {
+        const modal = button.closest(`#${MODAL_ID}`);
+
+        if (selectedSegmentIndex === null || selectedSegmentIndex === undefined) {
+            hideSegmentTooltip(modal);
+            return;
+        }
+
+        showSelectedSegmentTooltip(modal);
+    }
+
+    function updateVisibleSegmentTooltip(modal) {
+        const segments = getModalSegments(modal);
+        const segment = activeTooltipSegmentIndex === null || activeTooltipSegmentIndex === undefined
+            ? null
+            : segments[activeTooltipSegmentIndex];
+        const button = segment ? getSegmentButton(modal, segment.index) : null;
+
+        if (!segment || !button) {
+            showSelectedSegmentTooltip(modal);
+            return;
+        }
+
+        positionSegmentTooltip(button);
+    }
+
+    function scheduleVisibleTooltipUpdate(modal) {
+        if (tooltipUpdateFrame !== null) {
+            return;
+        }
+
+        tooltipUpdateFrame = window.requestAnimationFrame(() => {
+            tooltipUpdateFrame = null;
+            updateVisibleSegmentTooltip(modal);
+        });
     }
 
     function createSegmentButton(segment, allSegments) {
@@ -1190,54 +1311,36 @@
         );
 
         button.addEventListener("click", () => {
+            const wasSelected = selectedSegmentIndex === segment.index;
+
             toggleSelectedSegment(segment.index, allSegments);
-            positionSegmentTooltip(button);
+
+            if (wasSelected && (button.matches(":hover") || button === document.activeElement)) {
+                showSegmentTooltip(button, segment);
+            }
         });
 
         button.addEventListener("pointerenter", () => {
-            positionSegmentTooltip(button);
+            showSegmentTooltip(button, segment);
+        });
+
+        button.addEventListener("pointerleave", () => {
+            restoreSelectedSegmentTooltip(button);
         });
 
         button.addEventListener("focus", () => {
-            positionSegmentTooltip(button);
+            showSegmentTooltip(button, segment);
+        });
+
+        button.addEventListener("blur", () => {
+            restoreSelectedSegmentTooltip(button);
         });
 
         const visibleLabel = document.createElement("span");
         visibleLabel.className = "uf-ihd-segment-label";
         visibleLabel.textContent = segment.shortLabel;
 
-        const tooltip = document.createElement("div");
-        tooltip.className = "uf-ihd-tooltip";
-
-        const tooltipTitle = document.createElement("div");
-        tooltipTitle.className = "uf-ihd-tooltip-title";
-
-        const tooltipDot = document.createElement("span");
-        tooltipDot.className = "uf-ihd-tooltip-dot";
-
-        const tooltipTitleText = document.createElement("span");
-        tooltipTitleText.textContent = segment.label;
-
-        const tooltipTimes = document.createElement("div");
-        tooltipTimes.className = "uf-ihd-tooltip-times";
-
-        const start = document.createElement("span");
-        start.textContent = formatTime(segment.start);
-
-        const dash = document.createElement("span");
-        dash.textContent = "-";
-
-        const end = document.createElement("span");
-        end.textContent = formatTime(segment.end);
-
-        const duration = document.createElement("div");
-        duration.className = "uf-ihd-tooltip-duration";
-        duration.textContent = `Duration: ${formatDuration(segment.durationMilliseconds)}`;
-
-        tooltipTitle.append(tooltipDot, tooltipTitleText);
-        tooltipTimes.append(start, dash, end);
-        tooltip.append(tooltipTitle, tooltipTimes, duration);
-        button.append(visibleLabel, tooltip);
+        button.append(visibleLabel);
 
         return button;
     }
@@ -1388,7 +1491,7 @@
         });
 
         renderSelectedDetails(modal, segments);
-        updateVisibleSegmentTooltips(modal);
+        showSelectedSegmentTooltip(modal);
     }
 
     function handleDocumentClick(event) {
@@ -1421,7 +1524,7 @@
             return;
         }
 
-        updateVisibleSegmentTooltips(modal);
+        scheduleVisibleTooltipUpdate(modal);
     }
 
     function boot() {
