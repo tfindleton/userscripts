@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         UniFi Dashboard Better Internet Health
 // @namespace    https://unifi.ui.com/
-// @version      0.3.1
+// @version      0.3.2
 // @description  Better internet health for the UniFi dashboard
 // @match        https://unifi.ui.com/*
 // @match        https://*.ui.com/*
@@ -98,7 +98,7 @@
         style.textContent = `
             ${TILE_SELECTOR},
             ${TILE_SELECTOR} * {
-                cursor: pointer !important;
+                cursor: zoom-in !important;
             }
 
             #${MODAL_ID} {
