@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         UniFi Dashboard Better Internet Health
 // @namespace    https://unifi.ui.com/
-// @version      0.2
+// @version      0.3
 // @description  Better internet health for the UniFi dashboard
 // @match        https://unifi.ui.com/*
 // @match        https://*.ui.com/*
@@ -43,6 +43,12 @@
             label: "Internet Disconnected",
             shortLabel: "Disconnected",
             sort: 1,
+        },
+        latency: {
+            color: "rgb(223, 193, 22)",
+            label: "High Latency Detected",
+            shortLabel: "Latency",
+            sort: 2,
         },
         offline: {
             color: "rgb(66, 71, 77)",
@@ -839,6 +845,10 @@
             return COLOR_MAP.disconnected;
         }
 
+        if (normalized.includes("223,193,22")) {
+            return COLOR_MAP.latency;
+        }
+
         if (normalized.includes("66,71,77")) {
             return COLOR_MAP.offline;
         }
@@ -1054,6 +1064,7 @@
         modal.querySelector(".uf-ihd-legend").replaceChildren(
             createLegendItem(COLOR_MAP.healthy.color, "Healthy"),
             createLegendItem(COLOR_MAP.disconnected.color, "Internet Disconnected"),
+            createLegendItem(COLOR_MAP.latency.color, "High Latency Detected"),
             createLegendItem(COLOR_MAP.offline.color, "Site Offline / No Data")
         );
 
